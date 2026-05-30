@@ -54,7 +54,6 @@ src/
   hooks/
     http-server.ts          Bun.serve with Bearer auth, routes /hooks/*
     stop.ts                 Stop hook → assistant_message (prefers `last_assistant_message`)
-    post-tool.ts            (legacy) single-line per-tool formatter
   progress/
     tracker.ts              edit-in-place ProgressTracker (current progress UI)
   permission/
@@ -154,7 +153,7 @@ bun run typecheck
 bun run start
 ```
 
-Tests: `tests/**/*.test.ts` — pure logic units (config, FSM, queue, parser, chunker, gate, policy, relay, tracker, post-tool, stop, http-server). Integration test for tmux-session takes ~3s.
+Tests: `tests/**/*.test.ts` — pure logic units (config, FSM, queue, parser, chunker, gate, policy, relay, tracker, stop, http-server). Integration test for tmux-session takes ~3s.
 
 ## Caveats
 
