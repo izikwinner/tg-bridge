@@ -489,6 +489,48 @@ const relay = createRelay({
   defaultDecision: cfg.limits.permission_default,
 })
 
+// --- Login watchdog --------------------------------------------------------
+// Claude Code OAuth tokens expire on a long-running session (token rotation
+// race when several agents share one account, manual logout, etc). On expiry
+// the live session goes silent — no hook fires, the pane just shows
+// "Please run /login · API Error: 401" and the operator notices only by
+// manually attaching. This independent probe captures the pane on an interval
+// (works even while IDLE) and alerts the owner exactly once per outage.
+// Disable by setting LOGIN_WATCHDOG_MS=0.
+const AUTH_FAIL_RE =
+  /please run \/login|api error: 401|invalid authentication|unauthorized request|oauth token has expired/i
+let authAlerted = false
+if (cfg.limits.login_watchdog_ms > 0) {
+  setInterval(() => {
+    void (async () => {
+      try {
+        const pane = await tmux.capturePane()
+        if (AUTH_FAIL_RE.test(pane)) {
+          if (!authAlerted) {
+            authAlerted = true
+            log.warn('auth failure detected in pane — login required', {
+              session: cfg.claude.tmux_session,
+            })
+            if (ownerChatId) {
+              await bot.sendHtml(
+                ownerChatId,
+                `⚠️ <b>tg-bridge: Claude auth expired</b>\n\n` +
+                  `Agent <code>${cfg.claude.tmux_session}</code> can't reach the API (401 / needs /login). The bot is silent.\n\n` +
+                  `Fix:\n<pre>tmux -L ${cfg.claude.tmux_socket} attach -t ${cfg.claude.tmux_session}\n# in prompt: /login → open URL → paste code back\n# detach: Ctrl-B then D</pre>`,
+              )
+            }
+          }
+        } else {
+          authAlerted = false // session healthy again — re-arm for next outage
+        }
+      } catch (err) {
+        log.warn('login watchdog capturePane failed', { error: String(err) })
+      }
+    })()
+  }, cfg.limits.login_watchdog_ms)
+  log.info('login watchdog armed', { interval_ms: cfg.limits.login_watchdog_ms })
+}
+
 const server = await startHttpServer({
   host: cfg.bridge.host,
   port: cfg.bridge.port,

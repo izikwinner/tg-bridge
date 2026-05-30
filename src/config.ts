@@ -34,6 +34,7 @@ const EnvSchema = z.object({
   PERMISSION_DEFAULT: z.enum(['allow', 'deny']).default('deny'),
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
   BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
+  LOGIN_WATCHDOG_MS: z.coerce.number().int().nonnegative().default(60000),
   STREAMING_MODE: z.enum(['off', 'partial', 'progress']).default('progress'),
   GROQ_API_KEY_FILE: z.string().optional(),
   UPLOADS_TTL_DAYS: z.coerce.number().int().nonnegative().default(30),
@@ -67,6 +68,7 @@ export interface AppConfig {
     permission_default: 'allow' | 'deny'
     queue_max_depth: number
     busy_timeout_ms: number
+    login_watchdog_ms: number
   }
   streaming: { mode: 'off' | 'partial' | 'progress' }
   voice: { groq_api_key_file: string | null }
@@ -109,6 +111,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       permission_default: parsed.PERMISSION_DEFAULT,
       queue_max_depth: parsed.QUEUE_MAX_DEPTH,
       busy_timeout_ms: parsed.BUSY_TIMEOUT_MS,
+      login_watchdog_ms: parsed.LOGIN_WATCHDOG_MS,
     },
     streaming: { mode: parsed.STREAMING_MODE },
     voice: { groq_api_key_file: parsed.GROQ_API_KEY_FILE ?? null },
