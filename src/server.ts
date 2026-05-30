@@ -7,11 +7,13 @@ import { createBot } from './telegram/bot.js'
 import { allowMessage } from './telegram/gate.js'
 import { injectSenderPrefix } from './persona/sender-prefix.js'
 import { parseReply } from './reply/parser.js'
+import { formatReplyHtml } from './reply/markdown.js'
 import { startHttpServer } from './hooks/http-server.js'
 import { handleStopHook } from './hooks/stop.js'
 import { ProgressTracker } from './progress/tracker.js'
 import { transcribeAudio, loadGroqKey } from './voice/groq.js'
 import { downloadTelegramFile } from './telegram/file.js'
+import { cleanupUploads } from './uploads/cleanup.js'
 import { writeFileSync } from 'fs'
 import { basename } from 'path'
 import { createRelay } from './permission/relay.js'
@@ -122,7 +124,25 @@ const endTurnAndDelete = async (): Promise<void> => {
 
 let busyTimer: ReturnType<typeof setTimeout> | null = null
 let paneWatcher: ReturnType<typeof setInterval> | null = null
+let typingPulse: ReturnType<typeof setInterval> | null = null
+let typingChat: number | null = null
 let lastPaneFingerprint = ''
+
+const TYPING_TICK_MS = 4000
+
+const startTyping = (chatId: number): void => {
+  typingChat = chatId
+  void bot.sendChatAction(chatId, 'typing')
+  if (typingPulse) clearInterval(typingPulse)
+  typingPulse = setInterval(() => {
+    if (typingChat !== null) void bot.sendChatAction(typingChat, 'typing')
+  }, TYPING_TICK_MS)
+}
+
+const stopTyping = (): void => {
+  if (typingPulse) { clearInterval(typingPulse); typingPulse = null }
+  typingChat = null
+}
 
 const PANE_TICK_MS = 30000
 
@@ -179,6 +199,7 @@ const drain = async () => {
   lastInbound.set(next.chat_id, next.message_id)
   fsm.onSent()
   await startTurn(next.chat_id)
+  startTyping(next.chat_id)
   await tmux.sendKeys(next.text)
   armBusyTimer()
   startPaneWatcher()
@@ -186,6 +207,18 @@ const drain = async () => {
 
 const uploadsDir = join(cfg.claude.workspace, '.tg-uploads')
 mkdirSync(uploadsDir, { recursive: true })
+
+const startedAtMs = Date.now()
+
+const runCleanup = (): void => {
+  if (cfg.uploads.ttl_days <= 0) return
+  const r = cleanupUploads(uploadsDir, cfg.uploads.ttl_days * 24 * 60 * 60 * 1000)
+  if (r.removed > 0) {
+    log.info('uploads cleanup', { removed: r.removed, kept: r.kept, freedBytes: r.freedBytes })
+  }
+}
+runCleanup()
+setInterval(runCleanup, 24 * 60 * 60 * 1000)
 
 function safeFilename(name: string): string {
   const b = basename(name)
@@ -219,6 +252,35 @@ const saveIfFile = async (msg: {
     log.warn('file save failed', { error: String(err) })
     return null
   }
+}
+
+const formatUptime = (ms: number): string => {
+  const s = Math.floor(ms / 1000)
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (d > 0) return `${d}d ${h}h ${m}m`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${sec}s`
+  return `${sec}s`
+}
+
+const renderStatus = (): string => {
+  const uptime = formatUptime(Date.now() - startedAtMs)
+  const state = fsm.current()
+  const qd = queue.size()
+  const activeChat = active?.chatId ?? null
+  const activeElapsed = active ? active.tracker.elapsedSec() : null
+  const lines = [
+    `tg-bridge @ ${cfg.claude.tmux_session}`,
+    `uptime  ${uptime}`,
+    `state   ${state}`,
+    `queue   ${qd}`,
+    `streaming ${cfg.streaming.mode}`,
+    activeChat !== null ? `turn    chat=${activeChat} elapsed=${activeElapsed}s` : 'turn    -',
+  ]
+  return `<pre>${lines.join('\n')}</pre>`
 }
 
 const transcribeIfVoice = async (msg: {
@@ -265,6 +327,10 @@ const onTelegramMessage = async (msg: {
   )
   if (gate !== 'allow') {
     log.info('denied', { reason: gate, user_id: msg.from.id })
+    return
+  }
+  if ((msg.text ?? '').trim().toLowerCase() === '/status') {
+    await bot.sendHtml(msg.chat.id, renderStatus())
     return
   }
   let text = msg.text ?? msg.caption ?? ''
@@ -334,18 +400,29 @@ const server = await startHttpServer({
   onStop: async (body) => {
     const { assistant_message } = await handleStopHook(body as { transcript_path?: string })
     log.info('stop hook', { msg_len: assistant_message.length, chat: Array.from(lastInbound.keys()).pop() })
-    const { text, reactions } = parseReply(assistant_message)
+    const { text, reactions, buttons, files } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
-    const { buttons } = parseReply(assistant_message)
     disarmBusyTimer()
     stopPaneWatcher()
-    if (targetChat !== undefined && text.length > 0) {
+    stopTyping()
+    if (targetChat !== undefined && (text.length > 0 || files.length > 0)) {
       await endTurnAndDelete()
-      if (buttons.length > 0) {
-        await bot.sendButtons(targetChat, text, buttons)
-      } else {
-        await bot.sendText(targetChat, text)
+      if (text.length > 0) {
+        if (buttons.length > 0) {
+          await bot.sendButtons(targetChat, text, buttons)
+        } else {
+          const html = formatReplyHtml(text)
+          const sent = await bot.sendHtml(targetChat, html)
+          if (sent === null) await bot.sendText(targetChat, text)
+        }
+      }
+      for (const f of files) {
+        if (!existsSync(f.path)) {
+          log.warn('FILE marker path missing', { path: f.path })
+          continue
+        }
+        await bot.sendFile(targetChat, f)
       }
       if (reactions.length === 0 && targetMsg !== undefined) {
         await bot.setReaction(targetChat, targetMsg, 'thumbsup')

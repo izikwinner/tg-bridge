@@ -36,6 +36,7 @@ const EnvSchema = z.object({
   BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   STREAMING_MODE: z.enum(['off', 'partial', 'progress']).default('progress'),
   GROQ_API_KEY_FILE: z.string().optional(),
+  UPLOADS_TTL_DAYS: z.coerce.number().int().nonnegative().default(30),
 })
 
 export interface AppConfig {
@@ -67,6 +68,7 @@ export interface AppConfig {
   }
   streaming: { mode: 'off' | 'partial' | 'progress' }
   voice: { groq_api_key_file: string | null }
+  uploads: { ttl_days: number }
 }
 
 export function loadConfig(env: Record<string, string | undefined>): AppConfig {
@@ -107,5 +109,6 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     },
     streaming: { mode: parsed.STREAMING_MODE },
     voice: { groq_api_key_file: parsed.GROQ_API_KEY_FILE ?? null },
+    uploads: { ttl_days: parsed.UPLOADS_TTL_DAYS },
   }
 }

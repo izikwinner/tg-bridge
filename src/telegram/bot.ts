@@ -1,7 +1,27 @@
-import { Bot } from 'grammy'
+import { Bot, InputFile } from 'grammy'
 import type { ReactionTypeEmoji } from '@grammyjs/types'
 import { chunkForTelegram } from '../reply/sender.js'
 import type { Logger } from '../log.js'
+import { extname } from 'path'
+
+const PHOTO_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp'])
+const VIDEO_EXT = new Set(['.mp4', '.mov', '.webm'])
+const VOICE_EXT = new Set(['.ogg', '.oga', '.opus'])
+
+export interface FileSpec {
+  path: string
+  caption?: string
+  kind?: 'photo' | 'video' | 'document' | 'voice'
+}
+
+function inferKind(spec: FileSpec): 'photo' | 'video' | 'document' | 'voice' {
+  if (spec.kind) return spec.kind
+  const ext = extname(spec.path).toLowerCase()
+  if (PHOTO_EXT.has(ext)) return 'photo'
+  if (VIDEO_EXT.has(ext)) return 'video'
+  if (VOICE_EXT.has(ext)) return 'voice'
+  return 'document'
+}
 
 export interface BotButton {
   label: string
@@ -27,6 +47,8 @@ export interface BotWrapper {
   editHtml(chatId: number, messageId: number, html: string): Promise<void>
   deleteMessage(chatId: number, messageId: number): Promise<void>
   setReaction(chatId: number, messageId: number, emoji: string): Promise<void>
+  sendFile(chatId: number, spec: FileSpec): Promise<void>
+  sendChatAction(chatId: number, action: 'typing' | 'upload_photo' | 'upload_document'): Promise<void>
   getMe(): Promise<{ id: number; username: string }>
   start(onUpdate: (update: unknown) => Promise<void>): Promise<void>
   stop(): Promise<void>
@@ -91,6 +113,26 @@ export function createBot(token: string, log: Logger): BotWrapper {
         log.warn('deleteMessage failed', { error: String(err) })
       }
     },
+    async sendChatAction(chatId, action) {
+      try {
+        await bot.api.sendChatAction(chatId, action)
+      } catch {
+        // best-effort; ignored
+      }
+    },
+    async sendFile(chatId, spec) {
+      const kind = inferKind(spec)
+      const file = new InputFile(spec.path)
+      const opts = spec.caption ? { caption: spec.caption } : {}
+      try {
+        if (kind === 'photo') await bot.api.sendPhoto(chatId, file, opts)
+        else if (kind === 'video') await bot.api.sendVideo(chatId, file, opts)
+        else if (kind === 'voice') await bot.api.sendVoice(chatId, file, opts)
+        else await bot.api.sendDocument(chatId, file, opts)
+      } catch (err) {
+        log.warn('sendFile failed', { error: String(err), kind, path: spec.path })
+      }
+    },
     async setReaction(chatId, messageId, emojiSlug) {
       const emoji = EMOJI_MAP[emojiSlug]
       if (!emoji) {
@@ -109,6 +151,14 @@ export function createBot(token: string, log: Logger): BotWrapper {
     },
     async start(onUpdate) {
       bot.use(async (ctx) => { await onUpdate(ctx.update) })
+      bot.catch((err) => {
+        const msg = String(err?.error ?? err)
+        if (msg.includes('409') || /conflict/i.test(msg)) {
+          log.warn('telegram polling conflict (another instance polling); grammY will retry', { error: msg })
+        } else {
+          log.warn('bot error', { error: msg })
+        }
+      })
       void bot.start({ allowed_updates: ['message', 'callback_query', 'business_message', 'business_connection'] })
     },
     async stop() {

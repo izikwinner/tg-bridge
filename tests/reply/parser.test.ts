@@ -67,4 +67,27 @@ describe('parseReply', () => {
     expect(r.buttons).toEqual([{ label: 'Continue', payload: 'cont' }])
     expect(r.text.trim()).toBe('Done.')
   })
+
+  test('FILE marker — bare path', () => {
+    const r = parseReply('Hisobot:\n[FILE: /tmp/report.pdf]')
+    expect(r.files).toEqual([{ path: '/tmp/report.pdf' }])
+    expect(r.text).toBe('Hisobot:')
+  })
+
+  test('FILE marker — path with caption', () => {
+    const r = parseReply('[FILE: /tmp/graph.png caption="May usage"]')
+    expect(r.files).toEqual([{ path: '/tmp/graph.png', caption: 'May usage' }])
+  })
+
+  test('FILE marker — path with explicit kind', () => {
+    const r = parseReply('[FILE: /tmp/scan.jpg kind=document]')
+    expect(r.files[0]?.kind).toBe('document')
+  })
+
+  test('FILE marker — multiple files', () => {
+    const r = parseReply('[FILE: /a.png]\n[FILE: /b.pdf]')
+    expect(r.files).toHaveLength(2)
+    expect(r.files[0]?.path).toBe('/a.png')
+    expect(r.files[1]?.path).toBe('/b.pdf')
+  })
 })
