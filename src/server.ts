@@ -445,11 +445,11 @@ const server = await startHttpServer({
     const b = body as {
       chat_id?: number; user_id?: number; text?: string
       chatId?: number; message?: string
+      agentId?: string; from_agent?: string
       channel?: string; web_session_id?: string
       attachments?: Array<{ path?: string; name?: string; kind?: string }>
     }
-    const chat_id = b.chat_id ?? b.chatId
-    const user_id = b.user_id
+    const chat_id = b.chat_id ?? b.chatId ?? cfg.features.owner_user_ids[0]
     let text = b.text ?? b.message ?? ''
     if (Array.isArray(b.attachments) && b.attachments.length > 0) {
       const lines = b.attachments
@@ -457,11 +457,15 @@ const server = await startHttpServer({
         .map((a) => `Operator fayl yubordi: ${a.path}`)
       if (lines.length > 0) text = (text ? text + '\n' : '') + lines.join('\n')
     }
-    const rawChannel = (b.channel ?? 'telegram').toLowerCase()
+    // Infer channel: explicit `channel` wins; else agentId/from_agent ⇒ swarm push;
+    // else default to telegram. Swarm pushes don't have a Telegram user_id —
+    // fall back to chat_id (owner's id == chat_id in personal chats).
+    const rawChannel = (b.channel ?? (b.agentId || b.from_agent ? 'swarm' : 'telegram')).toLowerCase()
     const channel: QueueChannel =
       rawChannel === 'web' || rawChannel === 'swarm' ? rawChannel : 'telegram'
+    const user_id = b.user_id ?? chat_id
     if (!chat_id || !user_id || !text) return { status: 400, body: { error: 'bad payload' } }
-    log.info('gbrain push', { chat_id, channel, text_len: text.length, attachments: b.attachments?.length ?? 0 })
+    log.info('gbrain push', { chat_id, channel, text_len: text.length, attachments: b.attachments?.length ?? 0, from_agent: b.from_agent ?? b.agentId ?? null })
     const item: QueueItem = { chat_id, user_id, text, message_id: 0, channel }
     if (b.web_session_id) item.web_session_id = b.web_session_id
     queue.push(item)
