@@ -12,6 +12,8 @@ import { handleStopHook } from './hooks/stop.js'
 import { ProgressTracker } from './progress/tracker.js'
 import { transcribeAudio, loadGroqKey } from './voice/groq.js'
 import { downloadTelegramFile } from './telegram/file.js'
+import { writeFileSync } from 'fs'
+import { basename } from 'path'
 import { createRelay } from './permission/relay.js'
 import { needsRelay, type Policy } from './permission/policy.js'
 import { mkdirSync, existsSync, readFileSync } from 'fs'
@@ -119,13 +121,23 @@ const endTurnAndDelete = async (): Promise<void> => {
 }
 
 let busyTimer: ReturnType<typeof setTimeout> | null = null
+let paneWatcher: ReturnType<typeof setInterval> | null = null
+let lastPaneFingerprint = ''
+
+const PANE_TICK_MS = 30000
+
+const paneFingerprint = (s: string): string => {
+  const lines = s.replace(/[ \t]+$/gm, '').split('\n')
+  return lines.slice(-60).join('\n')
+}
 
 const armBusyTimer = (): void => {
   if (busyTimer) clearTimeout(busyTimer)
   busyTimer = setTimeout(() => {
     busyTimer = null
     if (fsm.current() === ClaudeState.BUSY) {
-      log.warn('busy timeout (no hook activity), forcing IDLE')
+      log.warn('busy timeout (no activity), forcing IDLE')
+      stopPaneWatcher()
       void endTurn('done')
       fsm.forceIdle()
       void drain()
@@ -137,6 +149,29 @@ const disarmBusyTimer = (): void => {
   if (busyTimer) { clearTimeout(busyTimer); busyTimer = null }
 }
 
+const startPaneWatcher = (): void => {
+  if (paneWatcher) return
+  lastPaneFingerprint = ''
+  paneWatcher = setInterval(() => {
+    void (async () => {
+      try {
+        const pane = await tmux.capturePane()
+        const fp = paneFingerprint(pane)
+        if (fp !== lastPaneFingerprint) {
+          lastPaneFingerprint = fp
+          armBusyTimer()
+        }
+      } catch (err) {
+        log.warn('capturePane failed', { error: String(err) })
+      }
+    })()
+  }, PANE_TICK_MS)
+}
+
+const stopPaneWatcher = (): void => {
+  if (paneWatcher) { clearInterval(paneWatcher); paneWatcher = null; lastPaneFingerprint = '' }
+}
+
 const drain = async () => {
   if (fsm.current() !== ClaudeState.IDLE) return
   const next = queue.shift()
@@ -146,6 +181,44 @@ const drain = async () => {
   await startTurn(next.chat_id)
   await tmux.sendKeys(next.text)
   armBusyTimer()
+  startPaneWatcher()
+}
+
+const uploadsDir = join(cfg.claude.workspace, '.tg-uploads')
+mkdirSync(uploadsDir, { recursive: true })
+
+function safeFilename(name: string): string {
+  const b = basename(name)
+  return b.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) || 'file'
+}
+
+function tsPrefix(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
+}
+
+const saveIfFile = async (msg: {
+  document?: { file_id: string; file_name?: string }
+  photo?: Array<{ file_id: string; file_size?: number }>
+  video?: { file_id: string; file_name?: string }
+}): Promise<string | null> => {
+  const file = msg.document
+    ?? msg.video
+    ?? (msg.photo && msg.photo.length > 0 ? msg.photo[msg.photo.length - 1] : undefined)
+  if (!file) return null
+  try {
+    const { buf, filename } = await downloadTelegramFile(cfg.telegram.bot_token, file.file_id)
+    const hint = (msg.document?.file_name ?? msg.video?.file_name ?? filename)
+    const name = safeFilename(hint)
+    const savePath = join(uploadsDir, `${tsPrefix()}-${name}`)
+    writeFileSync(savePath, Buffer.from(buf))
+    log.info('file saved', { path: savePath, bytes: buf.byteLength })
+    return savePath
+  } catch (err) {
+    log.warn('file save failed', { error: String(err) })
+    return null
+  }
 }
 
 const transcribeIfVoice = async (msg: {
@@ -177,8 +250,12 @@ const onTelegramMessage = async (msg: {
   from?: { id: number; username?: string; first_name?: string }
   chat: { id: number }
   text?: string
+  caption?: string
   voice?: { file_id: string; duration?: number }
   audio?: { file_id: string }
+  document?: { file_id: string; file_name?: string }
+  photo?: Array<{ file_id: string; file_size?: number }>
+  video?: { file_id: string; file_name?: string }
   message_id: number
 }) => {
   if (!msg.from) return
@@ -190,7 +267,12 @@ const onTelegramMessage = async (msg: {
     log.info('denied', { reason: gate, user_id: msg.from.id })
     return
   }
-  let text = msg.text ?? ''
+  let text = msg.text ?? msg.caption ?? ''
+  const savedPath = await saveIfFile(msg)
+  if (savedPath) {
+    const prefix = `Operator fayl yubordi: ${savedPath}`
+    text = text ? `${prefix}\n${text}` : prefix
+  }
   if (!text) {
     const transcript = await transcribeIfVoice(msg)
     if (transcript) text = transcript
@@ -256,6 +338,7 @@ const server = await startHttpServer({
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
     disarmBusyTimer()
+    stopPaneWatcher()
     if (targetChat !== undefined && text.length > 0) {
       await endTurnAndDelete()
       await bot.sendText(targetChat, text)

@@ -40,8 +40,11 @@ export function createTmuxSession(opts: TmuxSessionOpts): TmuxSession {
       if (!r2.ok) throw new Error(`tmux new-session failed: ${r2.stderr}`)
     },
     async sendKeys(text) {
-      const r = await run([...baseArgs, 'send-keys', '-t', opts.session, text, 'Enter'])
-      if (!r.ok) throw new Error(`tmux send-keys failed: ${r.stderr}`)
+      const r1 = await run([...baseArgs, 'send-keys', '-t', opts.session, '-l', text])
+      if (!r1.ok) throw new Error(`tmux send-keys (text) failed: ${r1.stderr}`)
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      const r2 = await run([...baseArgs, 'send-keys', '-t', opts.session, 'Enter'])
+      if (!r2.ok) throw new Error(`tmux send-keys (Enter) failed: ${r2.stderr}`)
     },
     async capturePane() {
       const r = await run([...baseArgs, 'capture-pane', '-t', opts.session, '-p'])
