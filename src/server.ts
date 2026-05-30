@@ -337,11 +337,16 @@ const server = await startHttpServer({
     const { text, reactions } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
+    const { buttons } = parseReply(assistant_message)
     disarmBusyTimer()
     stopPaneWatcher()
     if (targetChat !== undefined && text.length > 0) {
       await endTurnAndDelete()
-      await bot.sendText(targetChat, text)
+      if (buttons.length > 0) {
+        await bot.sendButtons(targetChat, text, buttons)
+      } else {
+        await bot.sendText(targetChat, text)
+      }
       if (reactions.length === 0 && targetMsg !== undefined) {
         await bot.setReaction(targetChat, targetMsg, 'thumbsup')
       } else {
@@ -428,15 +433,37 @@ log.info('http listening', { port: server.port })
 await bot.start(async (update) => {
   const u = update as {
     message?: Parameters<typeof onTelegramMessage>[0]
-    callback_query?: { data?: string; from: { id: number } }
+    callback_query?: {
+      id?: string
+      data?: string
+      from: { id: number }
+      message?: { chat: { id: number }; message_id: number }
+    }
   }
   if (u.message) await onTelegramMessage(u.message)
   if (u.callback_query?.data) {
-    const m = u.callback_query.data.match(/^perm:([0-9a-f-]+):(allow|deny)$/)
-    if (m && cfg.features.owner_user_ids.includes(u.callback_query.from.id)) {
-      const reqId = m[1]
-      const decision = m[2] as 'allow' | 'deny'
+    const data = u.callback_query.data
+    const fromId = u.callback_query.from.id
+    const perm = data.match(/^perm:([0-9a-f-]+):(allow|deny)$/)
+    if (perm && cfg.features.owner_user_ids.includes(fromId)) {
+      const reqId = perm[1]
+      const decision = perm[2] as 'allow' | 'deny'
       if (reqId) relay.callbackAnswer(reqId, decision)
+    } else if (data.startsWith('abtn:')) {
+      const payload = data.slice(5)
+      const chatId = u.callback_query.message?.chat.id
+      const msgId = u.callback_query.message?.message_id
+      const gate = chatId !== undefined && allowMessage(
+        { from_id: fromId, chat_id: chatId },
+        { user_ids: cfg.telegram.allowed_user_ids, chat_ids: cfg.telegram.allowed_chat_ids },
+      ) === 'allow'
+      if (gate && chatId !== undefined && msgId !== undefined) {
+        if (u.callback_query.id) {
+          await bot.raw.api.answerCallbackQuery(u.callback_query.id, { text: payload }).catch(() => {})
+        }
+        queue.push({ chat_id: chatId, user_id: fromId, text: payload, message_id: msgId })
+        void drain()
+      }
     }
   }
 })

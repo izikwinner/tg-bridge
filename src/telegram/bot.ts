@@ -3,9 +3,26 @@ import type { ReactionTypeEmoji } from '@grammyjs/types'
 import { chunkForTelegram } from '../reply/sender.js'
 import type { Logger } from '../log.js'
 
+export interface BotButton {
+  label: string
+  payload: string
+}
+
+const POSITIVE_RE = /^(ha|yes|da|ok|tasdiq|aha|albatta|sure|yep|qabul)$/i
+const NEGATIVE_RE = /^(yo'?q|yoq|no|net|нет|bekor|cancel|reject|rad)$/i
+
+function decorateLabel(label: string): string {
+  const s = label.trim()
+  if (/^\p{Emoji}/u.test(s)) return s
+  if (POSITIVE_RE.test(s)) return `✅ ${s}`
+  if (NEGATIVE_RE.test(s)) return `❌ ${s}`
+  return s
+}
+
 export interface BotWrapper {
   raw: Bot
   sendText(chatId: number, text: string, replyToMessageId?: number): Promise<void>
+  sendButtons(chatId: number, text: string, buttons: BotButton[]): Promise<void>
   sendHtml(chatId: number, html: string): Promise<number | null>
   editHtml(chatId: number, messageId: number, html: string): Promise<void>
   deleteMessage(chatId: number, messageId: number): Promise<void>
@@ -35,6 +52,17 @@ export function createBot(token: string, log: Logger): BotWrapper {
             ? { reply_parameters: { message_id: replyToMessageId } }
             : {},
         ).catch(err => log.warn('sendMessage failed', { error: String(err) }))
+      }
+    },
+    async sendButtons(chatId, text, buttons) {
+      if (buttons.length === 0) return
+      const rows = buttons.map((b) => [{ text: decorateLabel(b.label), callback_data: `abtn:${b.payload}` }])
+      try {
+        await bot.api.sendMessage(chatId, text, {
+          reply_markup: { inline_keyboard: rows },
+        })
+      } catch (err) {
+        log.warn('sendButtons failed', { error: String(err) })
       }
     },
     async sendHtml(chatId, html) {

@@ -31,4 +31,40 @@ describe('parseReply', () => {
     expect(r.reactions).toEqual(['fire'])
     expect(r.text).toBe('line1\nline2')
   })
+
+  test('extracts BUTTONS marker with label=payload pairs', () => {
+    const r = parseReply('Tanlang:\n[BUTTONS: Ha=yes | Yoq=no | Boshqa=other]')
+    expect(r.buttons).toEqual([
+      { label: 'Ha', payload: 'yes' },
+      { label: 'Yoq', payload: 'no' },
+      { label: 'Boshqa', payload: 'other' },
+    ])
+    expect(r.text).toBe('Tanlang:')
+  })
+
+  test('BUTTONS with bare label uses label as payload', () => {
+    const r = parseReply('[BUTTONS: Cancel | Retry]')
+    expect(r.buttons).toEqual([
+      { label: 'Cancel', payload: 'Cancel' },
+      { label: 'Retry', payload: 'Retry' },
+    ])
+  })
+
+  test('BUTTONS payload truncated to 59 chars', () => {
+    const r = parseReply('[BUTTONS: x=' + 'a'.repeat(100) + ']')
+    expect(r.buttons[0]?.payload.length).toBe(59)
+  })
+
+  test('BUTTONS cap at 8 entries', () => {
+    const entries = Array.from({length: 12}, (_, i) => `b${i}=${i}`).join(' | ')
+    const r = parseReply(`[BUTTONS: ${entries}]`)
+    expect(r.buttons.length).toBe(8)
+  })
+
+  test('reply with both REACT and BUTTONS', () => {
+    const r = parseReply('Done.\n[REACT:thumbsup]\n[BUTTONS: Continue=cont]')
+    expect(r.reactions).toEqual(['thumbsup'])
+    expect(r.buttons).toEqual([{ label: 'Continue', payload: 'cont' }])
+    expect(r.text.trim()).toBe('Done.')
+  })
 })
