@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises'
 
 export interface StopHookInput {
   transcript_path?: string
+  last_assistant_message?: unknown
 }
 
 export interface StopHookOutput {
@@ -23,6 +24,8 @@ function extractText(content: unknown): string {
 }
 
 export async function handleStopHook(input: StopHookInput): Promise<StopHookOutput> {
+  const direct = extractText(input.last_assistant_message)
+  if (direct.length > 0) return { assistant_message: direct }
   if (!input.transcript_path) return { assistant_message: '' }
   const raw = await readFile(input.transcript_path, 'utf8').catch(() => '')
   if (raw.length === 0) return { assistant_message: '' }

@@ -5,6 +5,26 @@ import { join } from 'path'
 import { handleStopHook } from '../../src/hooks/stop'
 
 describe('handleStopHook', () => {
+  test('prefers last_assistant_message from payload (Claude Code 2.x direct field)', async () => {
+    const r = await handleStopHook({ last_assistant_message: 'direct answer' })
+    expect(r.assistant_message).toBe('direct answer')
+  })
+
+  test('extracts text blocks from last_assistant_message array', async () => {
+    const r = await handleStopHook({
+      last_assistant_message: [{ type: 'text', text: 'hello' }, { type: 'text', text: 'world' }],
+    })
+    expect(r.assistant_message).toBe('hello\nworld')
+  })
+
+  test('falls back to transcript when last_assistant_message empty', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'stop-'))
+    const transcript = join(dir, 'transcript.jsonl')
+    writeFileSync(transcript, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'fallback' }] } }))
+    const r = await handleStopHook({ last_assistant_message: '', transcript_path: transcript })
+    expect(r.assistant_message).toBe('fallback')
+  })
+
   test('reads last assistant message (legacy string content)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'stop-'))
     const transcript = join(dir, 'transcript.jsonl')
