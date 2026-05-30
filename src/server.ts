@@ -130,12 +130,14 @@ const server = await startHttpServer({
   onGbrainPush: async (body) => {
     const b = body as { chat_id?: number; user_id?: number; text?: string }
     if (!b.chat_id || !b.user_id || !b.text) return { status: 400, body: { error: 'bad payload' } }
+    log.info('gbrain push', { chat_id: b.chat_id, text_len: b.text.length })
     queue.push({ chat_id: b.chat_id, user_id: b.user_id, text: b.text, message_id: 0 })
     void drain()
     return { status: 200, body: { status: 'accepted' } }
   },
   onStop: async (body) => {
     const { assistant_message } = await handleStopHook(body as { transcript_path?: string })
+    log.info('stop hook', { msg_len: assistant_message.length, chat: Array.from(lastInbound.keys()).pop() })
     const { text, reactions } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined

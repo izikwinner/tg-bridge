@@ -5,10 +5,11 @@ export interface ParsedReply {
   reactions: string[]
 }
 
-export function parseReply(input: string): ParsedReply {
+export function parseReply(input: string | undefined | null): ParsedReply {
   const reactions: string[] = []
   const keptLines: string[] = []
-  for (const line of input.split('\n')) {
+  const safe = typeof input === 'string' ? input : ''
+  for (const line of safe.split('\n')) {
     const m = line.match(MARKER_END)
     if (m && m[1]) {
       reactions.push(m[1])
