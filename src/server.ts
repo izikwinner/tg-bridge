@@ -152,16 +152,53 @@ const server = await startHttpServer({
     return { status: 200, body: { ok: true } }
   },
   onPreTool: async (body) => {
-    const b = body as { tool?: string; args?: Record<string, unknown> }
-    if (!b.tool) return { status: 400, body: { error: 'bad payload' } }
-    const inv = { tool: b.tool, args: b.args ?? {} }
+    const b = body as {
+      tool_name?: string
+      tool_input?: Record<string, unknown>
+      tool?: string
+      args?: Record<string, unknown>
+    }
+    const toolName = b.tool_name ?? b.tool
+    const toolArgs = b.tool_input ?? b.args ?? {}
+    if (!toolName) {
+      return {
+        status: 200,
+        body: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: 'no tool name; passthrough',
+          },
+        },
+      }
+    }
+    const inv = { tool: toolName, args: toolArgs }
+    log.info('pretool', { tool: toolName, relay: needsRelay(inv, policy) })
     if (!needsRelay(inv, policy)) {
-      return { status: 200, body: { decision: 'allow' } }
+      return {
+        status: 200,
+        body: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: 'policy: passthrough',
+          },
+        },
+      }
     }
     if (fsm.current() === ClaudeState.BUSY) fsm.onPreTool()
     const verdict = await relay.requestVerdict(inv)
     if (fsm.current() === ClaudeState.WAITING_PERMISSION) fsm.onPermissionVerdict()
-    return { status: 200, body: { decision: verdict } }
+    return {
+      status: 200,
+      body: {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: verdict,
+          permissionDecisionReason: `tg-bridge relay verdict: ${verdict}`,
+        },
+      },
+    }
   },
 })
 
