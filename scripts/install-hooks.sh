@@ -26,6 +26,7 @@ test -f "$TOKEN_FILE" || { echo "token file not found: $TOKEN_FILE" >&2; exit 1;
 
 HOOK_CMD_STOP="TG_BRIDGE_URL=http://127.0.0.1:${PORT}/hooks/stop TG_BRIDGE_TOKEN_FILE=${TOKEN_FILE} bun /opt/tg-bridge/scripts/hook-post.ts"
 HOOK_CMD_PRE="TG_BRIDGE_URL=http://127.0.0.1:${PORT}/hooks/pretool TG_BRIDGE_TOKEN_FILE=${TOKEN_FILE} bun /opt/tg-bridge/scripts/hook-post.ts"
+HOOK_CMD_POST="TG_BRIDGE_URL=http://127.0.0.1:${PORT}/hooks/posttool TG_BRIDGE_TOKEN_FILE=${TOKEN_FILE} bun /opt/tg-bridge/scripts/hook-post.ts"
 
 python3 <<PY
 import json, sys
@@ -43,6 +44,7 @@ def replace(name, command):
 
 replace("Stop", "$HOOK_CMD_STOP")
 replace("PreToolUse", "$HOOK_CMD_PRE")
+replace("PostToolUse", "$HOOK_CMD_POST")
 with open(p, "w") as f: json.dump(cfg, f, indent=2)
 print(f"install-hooks.sh: patched {p}")
 PY

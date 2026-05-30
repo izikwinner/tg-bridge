@@ -6,6 +6,8 @@ import type { Logger } from '../log.js'
 export interface BotWrapper {
   raw: Bot
   sendText(chatId: number, text: string, replyToMessageId?: number): Promise<void>
+  sendHtml(chatId: number, html: string): Promise<number | null>
+  editHtml(chatId: number, messageId: number, html: string): Promise<void>
   setReaction(chatId: number, messageId: number, emoji: string): Promise<void>
   getMe(): Promise<{ id: number; username: string }>
   start(onUpdate: (update: unknown) => Promise<void>): Promise<void>
@@ -32,6 +34,25 @@ export function createBot(token: string, log: Logger): BotWrapper {
             ? { reply_parameters: { message_id: replyToMessageId } }
             : {},
         ).catch(err => log.warn('sendMessage failed', { error: String(err) }))
+      }
+    },
+    async sendHtml(chatId, html) {
+      try {
+        const m = await bot.api.sendMessage(chatId, html, { parse_mode: 'HTML' })
+        return m.message_id
+      } catch (err) {
+        log.warn('sendHtml failed', { error: String(err) })
+        return null
+      }
+    },
+    async editHtml(chatId, messageId, html) {
+      try {
+        await bot.api.editMessageText(chatId, messageId, html, { parse_mode: 'HTML' })
+      } catch (err) {
+        const msg = String(err)
+        if (!msg.includes('message is not modified')) {
+          log.warn('editHtml failed', { error: msg })
+        }
       }
     },
     async setReaction(chatId, messageId, emojiSlug) {

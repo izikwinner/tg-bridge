@@ -9,6 +9,7 @@ import { injectSenderPrefix } from './persona/sender-prefix.js'
 import { parseReply } from './reply/parser.js'
 import { startHttpServer } from './hooks/http-server.js'
 import { handleStopHook } from './hooks/stop.js'
+import { ProgressTracker } from './progress/tracker.js'
 import { createRelay } from './permission/relay.js'
 import { needsRelay, type Policy } from './permission/policy.js'
 import { mkdirSync, existsSync, readFileSync } from 'fs'
@@ -51,16 +52,71 @@ const bot = createBot(cfg.telegram.bot_token, log)
 
 const lastInbound = new Map<number, number>()
 
+interface ActiveTurn {
+  chatId: number
+  tracker: ProgressTracker
+  progressMsgId: number | null
+  pendingEdit: boolean
+  lastEditMs: number
+  tickHandle: ReturnType<typeof setInterval> | null
+}
+let active: ActiveTurn | null = null
+
+const EDIT_MIN_GAP_MS = 1200
+const TICK_INTERVAL_MS = 5000
+
+const scheduleEdit = (turn: ActiveTurn): void => {
+  if (turn.progressMsgId == null || turn.pendingEdit) return
+  turn.pendingEdit = true
+  const since = Date.now() - turn.lastEditMs
+  const wait = Math.max(0, EDIT_MIN_GAP_MS - since)
+  setTimeout(async () => {
+    turn.pendingEdit = false
+    turn.lastEditMs = Date.now()
+    if (turn.progressMsgId == null) return
+    await bot.editHtml(turn.chatId, turn.progressMsgId, turn.tracker.render())
+  }, wait)
+}
+
+const startTurn = async (chatId: number): Promise<void> => {
+  const tracker = new ProgressTracker()
+  const turn: ActiveTurn = {
+    chatId,
+    tracker,
+    progressMsgId: null,
+    pendingEdit: false,
+    lastEditMs: 0,
+    tickHandle: null,
+  }
+  active = turn
+  const id = await bot.sendHtml(chatId, tracker.render())
+  turn.progressMsgId = id
+  turn.lastEditMs = Date.now()
+  turn.tickHandle = setInterval(() => scheduleEdit(turn), TICK_INTERVAL_MS)
+}
+
+const endTurn = async (finalState: 'done' = 'done'): Promise<void> => {
+  if (!active) return
+  const turn = active
+  active = null
+  if (turn.tickHandle) clearInterval(turn.tickHandle)
+  if (turn.progressMsgId != null) {
+    await bot.editHtml(turn.chatId, turn.progressMsgId, turn.tracker.render(finalState))
+  }
+}
+
 const drain = async () => {
   if (fsm.current() !== ClaudeState.IDLE) return
   const next = queue.shift()
   if (!next) return
   lastInbound.set(next.chat_id, next.message_id)
   fsm.onSent()
+  await startTurn(next.chat_id)
   await tmux.sendKeys(next.text)
   setTimeout(() => {
     if (fsm.current() === ClaudeState.BUSY) {
       log.warn('busy timeout, forcing IDLE')
+      void endTurn('done')
       fsm.forceIdle()
       void drain()
     }
@@ -92,6 +148,7 @@ const onTelegramMessage = async (msg: {
       owner_ids: cfg.features.owner_user_ids,
     })
   }
+  void bot.setReaction(msg.chat.id, msg.message_id, 'eyes').catch(() => {})
   const dropped = queue.push({
     chat_id: msg.chat.id,
     user_id: msg.from.id,
@@ -141,14 +198,28 @@ const server = await startHttpServer({
     const { text, reactions } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
+    await endTurn('done')
     if (targetChat !== undefined && text.length > 0) {
       await bot.sendText(targetChat, text)
-      for (const r of reactions) {
-        if (targetMsg !== undefined) await bot.setReaction(targetChat, targetMsg, r)
+      if (reactions.length === 0 && targetMsg !== undefined) {
+        await bot.setReaction(targetChat, targetMsg, 'thumbsup')
+      } else {
+        for (const r of reactions) {
+          if (targetMsg !== undefined) await bot.setReaction(targetChat, targetMsg, r)
+        }
       }
     }
     fsm.onStop()
     void drain()
+    return { status: 200, body: { ok: true } }
+  },
+  onPostTool: async (body) => {
+    const b = body as { tool_name?: string; tool_input?: Record<string, unknown>; tool?: string; args?: Record<string, unknown> }
+    const tool = b.tool_name ?? b.tool
+    const args = b.tool_input ?? b.args ?? {}
+    if (!tool || !active) return { status: 200, body: { ok: true } }
+    active.tracker.onTool(tool, args)
+    scheduleEdit(active)
     return { status: 200, body: { ok: true } }
   },
   onPreTool: async (body) => {

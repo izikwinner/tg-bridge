@@ -14,6 +14,7 @@ describe('http-server', () => {
       onGbrainPush: noop,
       onStop: noop,
       onPreTool: noop,
+      onPostTool: noop,
     })
     const res = await fetch(`http://127.0.0.1:${handle.port}/hooks/agent`, {
       method: 'POST', body: '{}',
@@ -25,7 +26,7 @@ describe('http-server', () => {
     handle = await startHttpServer({
       host: '127.0.0.1', port: 0,
       bearerToken: 'sekret',
-      onGbrainPush: noop, onStop: noop, onPreTool: noop,
+      onGbrainPush: noop, onStop: noop, onPreTool: noop, onPostTool: noop,
     })
     const res = await fetch(`http://127.0.0.1:${handle.port}/hooks/agent`, {
       method: 'POST',
@@ -35,11 +36,28 @@ describe('http-server', () => {
     expect(res.status).toBe(200)
   })
 
-  test('/health returns 200 without auth', async () => {
+  test('/hooks/posttool routes to onPostTool', async () => {
+    let seen: unknown = null
     handle = await startHttpServer({
       host: '127.0.0.1', port: 0,
       bearerToken: 'sekret',
       onGbrainPush: noop, onStop: noop, onPreTool: noop,
+      onPostTool: async (body) => { seen = body; return { status: 200, body: { ok: true } } },
+    })
+    const res = await fetch(`http://127.0.0.1:${handle.port}/hooks/posttool`, {
+      method: 'POST',
+      body: '{"tool_name":"Bash"}',
+      headers: { Authorization: 'Bearer sekret' },
+    })
+    expect(res.status).toBe(200)
+    expect((seen as { tool_name?: string }).tool_name).toBe('Bash')
+  })
+
+  test('/health returns 200 without auth', async () => {
+    handle = await startHttpServer({
+      host: '127.0.0.1', port: 0,
+      bearerToken: 'sekret',
+      onGbrainPush: noop, onStop: noop, onPreTool: noop, onPostTool: noop,
     })
     const res = await fetch(`http://127.0.0.1:${handle.port}/health`)
     expect(res.status).toBe(200)

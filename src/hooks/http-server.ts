@@ -10,6 +10,7 @@ export interface HttpServerOpts {
   onGbrainPush: (body: unknown) => Promise<HookResponse>
   onStop: (body: unknown) => Promise<HookResponse>
   onPreTool: (body: unknown) => Promise<HookResponse>
+  onPostTool: (body: unknown) => Promise<HookResponse>
 }
 
 export interface HttpServerHandle {
@@ -38,6 +39,7 @@ export async function startHttpServer(opts: HttpServerOpts): Promise<HttpServerH
       if (url.pathname === '/hooks/agent') handler = opts.onGbrainPush
       else if (url.pathname === '/hooks/stop') handler = opts.onStop
       else if (url.pathname === '/hooks/pretool') handler = opts.onPreTool
+      else if (url.pathname === '/hooks/posttool') handler = opts.onPostTool
       if (!handler) return new Response('not found', { status: 404 })
       const r = await handler(body)
       return new Response(JSON.stringify(r.body), {
