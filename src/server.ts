@@ -172,6 +172,50 @@ let typingPulse: ReturnType<typeof setInterval> | null = null
 let typingChat: number | null = null
 let lastPaneFingerprint = ''
 
+// Tools where Claude pauses for human input (AskUserQuestion modal, plan-mode
+// approval). While one is pending, no hook fires and the tmux pane only shows
+// the modal — so the busy timer would force-IDLE while Claude is genuinely
+// alive and waiting for the operator. We freeze the heartbeat for these.
+const AWAITING_USER_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
+let awaitingUserTool: string | null = null
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function renderAwaitingUserPrompt(tool: string, args: Record<string, unknown>): string | null {
+  if (tool === 'AskUserQuestion') {
+    const questions = Array.isArray((args as { questions?: unknown }).questions)
+      ? (args as { questions: Array<Record<string, unknown>> }).questions
+      : []
+    if (questions.length === 0) return null
+    const lines: string[] = ['<b>❓ Agent savol berdi:</b>', '']
+    for (const q of questions) {
+      const qText = typeof q.question === 'string' ? q.question : ''
+      if (qText) lines.push(escapeHtml(qText))
+      const opts = Array.isArray(q.options) ? q.options as Array<Record<string, unknown>> : []
+      for (let i = 0; i < opts.length; i++) {
+        const o = opts[i]!
+        const label = typeof o.label === 'string' ? o.label : `option ${i + 1}`
+        const desc = typeof o.description === 'string' ? ` — ${o.description}` : ''
+        lines.push(`  ${i + 1}. <b>${escapeHtml(label)}</b>${escapeHtml(desc)}`)
+      }
+      lines.push('')
+    }
+    lines.push("<i>Javobni shu chatga oddiy matn bilan yozing — Claude modal'iga uzatiladi.</i>")
+    return lines.join('\n')
+  }
+  if (tool === 'ExitPlanMode') {
+    const plan = typeof (args as { plan?: unknown }).plan === 'string'
+      ? (args as { plan: string }).plan
+      : ''
+    const head = "<b>📋 Agent rejani tasdiqlash so'rayapti:</b>\n\n"
+    const body = plan ? `<pre>${escapeHtml(plan)}</pre>\n\n` : ''
+    return head + body + "<i>Tasdiqlash: \"ha\" deb yozing yoki o'zgartirish kerakli matnni yuboring.</i>"
+  }
+  return null
+}
+
 const TYPING_TICK_MS = 4000
 
 const startTyping = (chatId: number): void => {
@@ -405,6 +449,14 @@ const onTelegramMessage = async (msg: {
     })
   }
   void bot.setReaction(msg.chat.id, msg.message_id, 'eyes').catch(() => {})
+  // If Claude is sitting in an AskUserQuestion / ExitPlanMode modal, the FSM
+  // is BUSY and queue.push won't drain. Route the operator's text straight
+  // into the tmux pane so the modal consumes it as the answer.
+  if (awaitingUserTool) {
+    log.info('routing message into active modal', { tool: awaitingUserTool, text_len: text.length })
+    await tmux.sendKeys(text)
+    return
+  }
   const dropped = queue.push({
     chat_id: msg.chat.id,
     user_id: msg.from.id,
@@ -533,7 +585,12 @@ const server = await startHttpServer({
     const tool = b.tool_name ?? b.tool
     const args = b.tool_input ?? b.args ?? {}
     if (!tool) return { status: 200, body: { ok: true } }
+    if (awaitingUserTool && tool === awaitingUserTool) {
+      log.info('user answered, resuming heartbeat', { tool })
+      awaitingUserTool = null
+    }
     armBusyTimer()
+    if (active) startPaneWatcher()
     if (!active || cfg.streaming.mode !== 'progress') return { status: 200, body: { ok: true } }
     active.tracker.onTool(tool, args)
     scheduleEdit(active)
@@ -560,7 +617,30 @@ const server = await startHttpServer({
         },
       }
     }
-    armBusyTimer()
+    if (AWAITING_USER_TOOLS.has(toolName)) {
+      awaitingUserTool = toolName
+      disarmBusyTimer()
+      stopPaneWatcher()
+      log.info('awaiting user input — heartbeat frozen', { tool: toolName })
+      const surfaceChat = Array.from(lastInbound.keys()).pop()
+      if (surfaceChat !== undefined) {
+        void (async () => {
+          try {
+            const html = renderAwaitingUserPrompt(toolName, toolArgs)
+            if (html) await bot.sendHtml(surfaceChat, html)
+          } catch (err) {
+            log.warn('failed to surface awaiting-user prompt', { error: String(err) })
+          }
+        })()
+      }
+    } else {
+      if (awaitingUserTool) {
+        log.info('user activity detected, resuming heartbeat', { prev: awaitingUserTool })
+        awaitingUserTool = null
+      }
+      armBusyTimer()
+      if (active) startPaneWatcher()
+    }
     if (toolName === 'Task' && active && cfg.streaming.mode === 'progress') {
       active.tracker.onTaskStart(toolArgs)
       scheduleEdit(active)
