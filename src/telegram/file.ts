@@ -19,6 +19,7 @@ export async function downloadTelegramFile(
   const dl = await fetch(`https://api.telegram.org/file/bot${botToken}/${path}`)
   if (!dl.ok) throw new Error(`file download ${dl.status}`)
   const buf = await dl.arrayBuffer()
-  const filename = path.split('/').pop() ?? 'audio.ogg'
+  const raw = path.split('/').pop() ?? 'audio.ogg'
+  const filename = raw.replace(/\.oga$/i, '.ogg')
   return { buf, filename }
 }
