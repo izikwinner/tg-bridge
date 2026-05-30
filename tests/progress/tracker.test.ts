@@ -89,6 +89,87 @@ describe('ProgressTracker', () => {
     expect(out).toContain('&lt;script&gt;')
   })
 
+  test('TodoWrite via onTool routes to onTodoWrite (not a tool call)', () => {
+    const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t.onTool('TodoWrite', { todos: [
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'in_progress' },
+    ] })
+    const out = t.render()
+    expect(out).toContain('plan:')
+    expect(out).toContain('x a')
+    expect(out).toContain('&gt; b')
+    expect(out).not.toContain('todowrite')
+  })
+
+  test('plan: progress bar reflects done/total', () => {
+    const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t.onTodoWrite([
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'completed' },
+      { content: 'c', status: 'in_progress' },
+      { content: 'd', status: 'pending' },
+    ])
+    const out = t.render()
+    expect(out).toContain('50%')
+    expect(out).toContain('▰▰▰▰▰▱▱▱▱▱')
+    expect(out).toContain('... +1 done')
+    expect(out).toContain('x b')
+    expect(out).toContain('&gt; c')
+    expect(out).toContain('    d')
+  })
+
+  test('plan: collapses extra pending into "... +N more"', () => {
+    const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t.onTodoWrite([
+      { content: 'cur', status: 'in_progress' },
+      { content: 'p1', status: 'pending' },
+      { content: 'p2', status: 'pending' },
+      { content: 'p3', status: 'pending' },
+      { content: 'p4', status: 'pending' },
+    ])
+    const out = t.render()
+    expect(out).toContain('    p1')
+    expect(out).toContain('    p2')
+    expect(out).toContain('... +2 more')
+    expect(out).not.toContain('    p3')
+  })
+
+  test('plan: subject/title fallback when content missing', () => {
+    const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t.onTodoWrite([
+      { subject: 'from-subject', status: 'in_progress' },
+      { title: 'from-title', status: 'pending' },
+    ])
+    const out = t.render()
+    expect(out).toContain('&gt; from-subject')
+    expect(out).toContain('    from-title')
+  })
+
+  test('plan: 0% / 100% edges', () => {
+    const tracker = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    tracker.onTodoWrite([{ content: 'x', status: 'pending' }])
+    expect(tracker.render()).toContain('▱▱▱▱▱▱▱▱▱▱ 0%')
+
+    const t2 = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t2.onTodoWrite([
+      { content: 'a', status: 'completed' },
+      { content: 'b', status: 'completed' },
+    ])
+    expect(t2.render()).toContain('▰▰▰▰▰▰▰▰▰▰ 100%')
+  })
+
+  test('plan rendered after tool calls in correct order', () => {
+    const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
+    t.onTool('Bash', { command: 'ls' })
+    t.onTodoWrite([{ content: 'task', status: 'in_progress' }])
+    const out = t.render()
+    const toolIdx = out.indexOf('▸ [B] bash ls')
+    const planIdx = out.indexOf('plan:')
+    expect(toolIdx).toBeGreaterThan(-1)
+    expect(planIdx).toBeGreaterThan(toolIdx)
+  })
+
   test('mixed tools render with their tags', () => {
     const t = new ProgressTracker({ now: () => 1000, startMs: 1000 })
     t.onTool('Read', { file_path: '/x/foo.ts' })

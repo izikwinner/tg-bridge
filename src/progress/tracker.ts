@@ -86,13 +86,36 @@ export interface ToolCall {
   detail: string
 }
 
+export interface Todo {
+  content?: string
+  subject?: string
+  title?: string
+  status?: 'pending' | 'in_progress' | 'completed' | string
+}
+
 export interface ProgressTrackerOpts {
   now?: () => number
   startMs?: number
 }
 
+const TODO_MAX = 60
+const BAR_WIDTH = 10
+
+function todoText(t: Todo): string {
+  const raw = t.content ?? t.subject ?? t.title ?? ''
+  return raw.length > TODO_MAX ? raw.slice(0, TODO_MAX) : raw
+}
+
+function progressBar(done: number, total: number): string {
+  if (total <= 0) return ''
+  const pct = Math.min(100, Math.floor((done * 100) / total))
+  const filled = Math.floor((BAR_WIDTH * done) / total)
+  return '▰'.repeat(filled) + '▱'.repeat(BAR_WIDTH - filled) + ` ${pct}%`
+}
+
 export class ProgressTracker {
   private toolCalls: ToolCall[] = []
+  private todos: Todo[] = []
   private readonly startMs: number
   private readonly now: () => number
 
@@ -102,14 +125,42 @@ export class ProgressTracker {
   }
 
   onTool(name: string, input: Record<string, unknown>): void {
+    if (name === 'TodoWrite') {
+      const raw = input['todos']
+      if (Array.isArray(raw)) this.onTodoWrite(raw as Todo[])
+      return
+    }
     const tag = TOOL_TAGS[name] ?? DEFAULT_TAG
     const detail = summarizeToolInput(name, input)
     this.toolCalls.push({ tag, name, detail })
     if (this.toolCalls.length > KEEP) this.toolCalls.shift()
   }
 
+  onTodoWrite(todos: Todo[]): void {
+    this.todos = todos
+  }
+
   elapsedSec(): number {
     return Math.max(0, Math.floor((this.now() - this.startMs) / 1000))
+  }
+
+  private renderPlan(): string[] {
+    if (this.todos.length === 0) return []
+    const completed = this.todos.filter((t) => t.status === 'completed')
+    const inProgress = this.todos.filter((t) => t.status === 'in_progress')
+    const pending = this.todos.filter((t) => t.status === 'pending')
+    const done = completed.length
+    const total = this.todos.length
+    const lines: string[] = ['plan:']
+    if (done > 1) lines.push(`  ... +${done - 1} done`)
+    const lastCompleted = completed[completed.length - 1]
+    if (lastCompleted) lines.push(`  x ${todoText(lastCompleted)}`)
+    for (const t of inProgress) lines.push(`  > ${todoText(t)}`)
+    const pendingHead = pending.slice(0, 2)
+    for (const t of pendingHead) lines.push(`    ${todoText(t)}`)
+    if (pending.length > 2) lines.push(`    ... +${pending.length - 2} more`)
+    lines.push(progressBar(done, total))
+    return lines
   }
 
   render(state: 'working' | 'done' = 'working'): string {
@@ -126,6 +177,11 @@ export class ProgressTracker {
         const detailPart = tc.detail ? ` ${tc.detail}` : ''
         lines.push(`▸ ${tc.tag} ${namePart}${detailPart}`)
       }
+    }
+    const plan = this.renderPlan()
+    if (plan.length > 0) {
+      lines.push('')
+      lines.push(...plan)
     }
     return `<pre>${escapeHtml(lines.join('\n'))}</pre>`
   }

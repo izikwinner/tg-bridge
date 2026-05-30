@@ -33,7 +33,7 @@ const EnvSchema = z.object({
   PERMISSION_TIMEOUT_MS: z.coerce.number().int().positive().default(50000),
   PERMISSION_DEFAULT: z.enum(['allow', 'deny']).default('deny'),
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
-  BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+  BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
 })
 
 export interface AppConfig {

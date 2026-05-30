@@ -25,7 +25,7 @@ describe('config', () => {
     expect(cfg.features.business_api).toBe(false)
     expect(cfg.features.inject_sender_identity).toBe(false)
     expect(cfg.limits.permission_timeout_ms).toBe(50000)
-    expect(cfg.limits.busy_timeout_ms).toBe(180000)
+    expect(cfg.limits.busy_timeout_ms).toBe(300000)
     expect(cfg.limits.queue_max_depth).toBe(100)
   })
 

@@ -8,6 +8,7 @@ export interface BotWrapper {
   sendText(chatId: number, text: string, replyToMessageId?: number): Promise<void>
   sendHtml(chatId: number, html: string): Promise<number | null>
   editHtml(chatId: number, messageId: number, html: string): Promise<void>
+  deleteMessage(chatId: number, messageId: number): Promise<void>
   setReaction(chatId: number, messageId: number, emoji: string): Promise<void>
   getMe(): Promise<{ id: number; username: string }>
   start(onUpdate: (update: unknown) => Promise<void>): Promise<void>
@@ -53,6 +54,13 @@ export function createBot(token: string, log: Logger): BotWrapper {
         if (!msg.includes('message is not modified')) {
           log.warn('editHtml failed', { error: msg })
         }
+      }
+    },
+    async deleteMessage(chatId, messageId) {
+      try {
+        await bot.api.deleteMessage(chatId, messageId)
+      } catch (err) {
+        log.warn('deleteMessage failed', { error: String(err) })
       }
     },
     async setReaction(chatId, messageId, emojiSlug) {

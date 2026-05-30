@@ -105,6 +105,35 @@ const endTurn = async (finalState: 'done' = 'done'): Promise<void> => {
   }
 }
 
+const endTurnAndDelete = async (): Promise<void> => {
+  if (!active) return
+  const turn = active
+  active = null
+  if (turn.tickHandle) clearInterval(turn.tickHandle)
+  if (turn.progressMsgId != null) {
+    await bot.deleteMessage(turn.chatId, turn.progressMsgId)
+  }
+}
+
+let busyTimer: ReturnType<typeof setTimeout> | null = null
+
+const armBusyTimer = (): void => {
+  if (busyTimer) clearTimeout(busyTimer)
+  busyTimer = setTimeout(() => {
+    busyTimer = null
+    if (fsm.current() === ClaudeState.BUSY) {
+      log.warn('busy timeout (no hook activity), forcing IDLE')
+      void endTurn('done')
+      fsm.forceIdle()
+      void drain()
+    }
+  }, cfg.limits.busy_timeout_ms)
+}
+
+const disarmBusyTimer = (): void => {
+  if (busyTimer) { clearTimeout(busyTimer); busyTimer = null }
+}
+
 const drain = async () => {
   if (fsm.current() !== ClaudeState.IDLE) return
   const next = queue.shift()
@@ -113,14 +142,7 @@ const drain = async () => {
   fsm.onSent()
   await startTurn(next.chat_id)
   await tmux.sendKeys(next.text)
-  setTimeout(() => {
-    if (fsm.current() === ClaudeState.BUSY) {
-      log.warn('busy timeout, forcing IDLE')
-      void endTurn('done')
-      fsm.forceIdle()
-      void drain()
-    }
-  }, cfg.limits.busy_timeout_ms)
+  armBusyTimer()
 }
 
 const onTelegramMessage = async (msg: {
@@ -198,8 +220,9 @@ const server = await startHttpServer({
     const { text, reactions } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
     const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
-    await endTurn('done')
+    disarmBusyTimer()
     if (targetChat !== undefined && text.length > 0) {
+      await endTurnAndDelete()
       await bot.sendText(targetChat, text)
       if (reactions.length === 0 && targetMsg !== undefined) {
         await bot.setReaction(targetChat, targetMsg, 'thumbsup')
@@ -208,6 +231,8 @@ const server = await startHttpServer({
           if (targetMsg !== undefined) await bot.setReaction(targetChat, targetMsg, r)
         }
       }
+    } else {
+      await endTurn('done')
     }
     fsm.onStop()
     void drain()
@@ -217,7 +242,9 @@ const server = await startHttpServer({
     const b = body as { tool_name?: string; tool_input?: Record<string, unknown>; tool?: string; args?: Record<string, unknown> }
     const tool = b.tool_name ?? b.tool
     const args = b.tool_input ?? b.args ?? {}
-    if (!tool || !active) return { status: 200, body: { ok: true } }
+    if (!tool) return { status: 200, body: { ok: true } }
+    armBusyTimer()
+    if (!active) return { status: 200, body: { ok: true } }
     active.tracker.onTool(tool, args)
     scheduleEdit(active)
     return { status: 200, body: { ok: true } }
@@ -243,6 +270,7 @@ const server = await startHttpServer({
         },
       }
     }
+    armBusyTimer()
     const inv = { tool: toolName, args: toolArgs }
     log.info('pretool', { tool: toolName, relay: needsRelay(inv, policy) })
     if (!needsRelay(inv, policy)) {
