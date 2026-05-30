@@ -45,5 +45,5 @@ export async function startHttpServer(opts: HttpServerOpts): Promise<HttpServerH
       })
     },
   })
-  return { port: server.port, async stop() { server.stop(true) } }
+  return { port: server.port ?? opts.port, async stop() { server.stop(true) } }
 }
