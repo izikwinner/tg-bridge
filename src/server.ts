@@ -10,6 +10,8 @@ import { parseReply } from './reply/parser.js'
 import { startHttpServer } from './hooks/http-server.js'
 import { handleStopHook } from './hooks/stop.js'
 import { ProgressTracker } from './progress/tracker.js'
+import { transcribeAudio, loadGroqKey } from './voice/groq.js'
+import { downloadTelegramFile } from './telegram/file.js'
 import { createRelay } from './permission/relay.js'
 import { needsRelay, type Policy } from './permission/policy.js'
 import { mkdirSync, existsSync, readFileSync } from 'fs'
@@ -79,6 +81,7 @@ const scheduleEdit = (turn: ActiveTurn): void => {
 }
 
 const startTurn = async (chatId: number): Promise<void> => {
+  if (cfg.streaming.mode === 'off') return
   const tracker = new ProgressTracker()
   const turn: ActiveTurn = {
     chatId,
@@ -145,13 +148,40 @@ const drain = async () => {
   armBusyTimer()
 }
 
+const transcribeIfVoice = async (msg: {
+  voice?: { file_id: string; duration?: number }
+  audio?: { file_id: string }
+}): Promise<string | null> => {
+  const fileId = msg.voice?.file_id ?? msg.audio?.file_id
+  if (!fileId) return null
+  if (!cfg.voice.groq_api_key_file) {
+    log.warn('voice received but GROQ_API_KEY_FILE unset')
+    return null
+  }
+  try {
+    const key = loadGroqKey(cfg.voice.groq_api_key_file)
+    const { buf, filename } = await downloadTelegramFile(cfg.telegram.bot_token, fileId)
+    const mime = filename.endsWith('.ogg') || filename.endsWith('.oga')
+      ? 'audio/ogg'
+      : 'audio/mpeg'
+    const text = await transcribeAudio({ apiKey: key, audio: buf, filename, mimeType: mime })
+    log.info('voice transcribed', { len: text.length })
+    return text
+  } catch (err) {
+    log.warn('voice transcription failed', { error: String(err) })
+    return null
+  }
+}
+
 const onTelegramMessage = async (msg: {
   from?: { id: number; username?: string; first_name?: string }
   chat: { id: number }
   text?: string
+  voice?: { file_id: string; duration?: number }
+  audio?: { file_id: string }
   message_id: number
 }) => {
-  if (!msg.from || !msg.text) return
+  if (!msg.from) return
   const gate = allowMessage(
     { from_id: msg.from.id, chat_id: msg.chat.id },
     { user_ids: cfg.telegram.allowed_user_ids, chat_ids: cfg.telegram.allowed_chat_ids },
@@ -160,7 +190,12 @@ const onTelegramMessage = async (msg: {
     log.info('denied', { reason: gate, user_id: msg.from.id })
     return
   }
-  let text = msg.text
+  let text = msg.text ?? ''
+  if (!text) {
+    const transcript = await transcribeIfVoice(msg)
+    if (transcript) text = transcript
+  }
+  if (!text) return
   if (cfg.features.inject_sender_identity) {
     text = injectSenderPrefix({
       text,
@@ -244,7 +279,7 @@ const server = await startHttpServer({
     const args = b.tool_input ?? b.args ?? {}
     if (!tool) return { status: 200, body: { ok: true } }
     armBusyTimer()
-    if (!active) return { status: 200, body: { ok: true } }
+    if (!active || cfg.streaming.mode !== 'progress') return { status: 200, body: { ok: true } }
     active.tracker.onTool(tool, args)
     scheduleEdit(active)
     return { status: 200, body: { ok: true } }
@@ -271,6 +306,10 @@ const server = await startHttpServer({
       }
     }
     armBusyTimer()
+    if (toolName === 'Task' && active && cfg.streaming.mode === 'progress') {
+      active.tracker.onTaskStart(toolArgs)
+      scheduleEdit(active)
+    }
     const inv = { tool: toolName, args: toolArgs }
     log.info('pretool', { tool: toolName, relay: needsRelay(inv, policy) })
     if (!needsRelay(inv, policy)) {

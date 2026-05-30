@@ -27,6 +27,32 @@ describe('config', () => {
     expect(cfg.limits.permission_timeout_ms).toBe(50000)
     expect(cfg.limits.busy_timeout_ms).toBe(300000)
     expect(cfg.limits.queue_max_depth).toBe(100)
+    expect(cfg.streaming.mode).toBe('progress')
+    expect(cfg.voice.groq_api_key_file).toBeNull()
+  })
+
+  test('STREAMING_MODE off', () => {
+    const env = {
+      TELEGRAM_BOT_TOKEN: 't', TELEGRAM_BOT_ID: '1',
+      TELEGRAM_ALLOWED_USER_IDS: '1', TELEGRAM_ALLOWED_CHAT_IDS: '1',
+      BRIDGE_PORT: '9091', BRIDGE_BEARER_TOKEN: 't',
+      TMUX_SOCKET: 's', TMUX_SESSION: 's',
+      CLAUDE_BINARY: '/c', WORKSPACE: '/w', STATE_DIR: '/s', LOG_DIR: '/l',
+      STREAMING_MODE: 'off',
+    }
+    expect(loadConfig(env).streaming.mode).toBe('off')
+  })
+
+  test('GROQ_API_KEY_FILE optional', () => {
+    const env = {
+      TELEGRAM_BOT_TOKEN: 't', TELEGRAM_BOT_ID: '1',
+      TELEGRAM_ALLOWED_USER_IDS: '1', TELEGRAM_ALLOWED_CHAT_IDS: '1',
+      BRIDGE_PORT: '9091', BRIDGE_BEARER_TOKEN: 't',
+      TMUX_SOCKET: 's', TMUX_SESSION: 's',
+      CLAUDE_BINARY: '/c', WORKSPACE: '/w', STATE_DIR: '/s', LOG_DIR: '/l',
+      GROQ_API_KEY_FILE: '/home/Izik/.secrets/groq-api-key',
+    }
+    expect(loadConfig(env).voice.groq_api_key_file).toBe('/home/Izik/.secrets/groq-api-key')
   })
 
   test('rejects missing TELEGRAM_BOT_TOKEN', () => {

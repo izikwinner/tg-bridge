@@ -80,6 +80,8 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+import { maskSecrets } from './mask.js'
+
 export interface ToolCall {
   tag: string
   name: string
@@ -91,6 +93,12 @@ export interface Todo {
   subject?: string
   title?: string
   status?: 'pending' | 'in_progress' | 'completed' | string
+}
+
+export interface Dispatch {
+  label: string
+  desc: string
+  status: 'running' | 'done'
 }
 
 export interface ProgressTrackerOpts {
@@ -116,6 +124,7 @@ function progressBar(done: number, total: number): string {
 export class ProgressTracker {
   private toolCalls: ToolCall[] = []
   private todos: Todo[] = []
+  private dispatches: Dispatch[] = []
   private readonly startMs: number
   private readonly now: () => number
 
@@ -130,10 +139,36 @@ export class ProgressTracker {
       if (Array.isArray(raw)) this.onTodoWrite(raw as Todo[])
       return
     }
+    if (name === 'Task') {
+      this.onTaskEnd(input)
+      return
+    }
     const tag = TOOL_TAGS[name] ?? DEFAULT_TAG
-    const detail = summarizeToolInput(name, input)
+    const detail = maskSecrets(summarizeToolInput(name, input))
     this.toolCalls.push({ tag, name, detail })
     if (this.toolCalls.length > KEEP) this.toolCalls.shift()
+  }
+
+  onTaskStart(input: Record<string, unknown>): void {
+    const label = String(input['subagent_type'] ?? '?')
+    const desc = maskSecrets(String(input['description'] ?? ''))
+    this.dispatches.push({ label, desc, status: 'running' })
+  }
+
+  onTaskEnd(input: Record<string, unknown>): void {
+    const label = String(input['subagent_type'] ?? '?')
+    for (let i = this.dispatches.length - 1; i >= 0; i--) {
+      const d = this.dispatches[i]
+      if (d && d.label === label && d.status === 'running') {
+        d.status = 'done'
+        return
+      }
+    }
+    this.dispatches.push({
+      label,
+      desc: maskSecrets(String(input['description'] ?? '')),
+      status: 'done',
+    })
   }
 
   onTodoWrite(todos: Todo[]): void {
@@ -142,6 +177,27 @@ export class ProgressTracker {
 
   elapsedSec(): number {
     return Math.max(0, Math.floor((this.now() - this.startMs) / 1000))
+  }
+
+  private renderDispatches(): string[] {
+    if (this.dispatches.length === 0) return []
+    const total = this.dispatches.length
+    const lines: string[] = ['agents:']
+    const recent = this.dispatches.slice(-4)
+    const baseIdx = Math.max(1, total - recent.length + 1)
+    for (let i = 0; i < recent.length; i++) {
+      const d = recent[i]!
+      const idx = baseIdx + i
+      const marker = d.status === 'done' ? 'x' : '>'
+      const descPart = d.desc ? ` — ${d.desc.slice(0, 40)}` : ''
+      lines.push(` ${String(idx).padStart(2)} | ${marker} ${d.label}${descPart}`)
+    }
+    if (total > recent.length) {
+      lines.unshift(`  ... +${total - recent.length} earlier`)
+    }
+    const done = this.dispatches.filter((d) => d.status === 'done').length
+    if (total > 1) lines.push(progressBar(done, total))
+    return lines
   }
 
   private renderPlan(): string[] {
@@ -182,6 +238,11 @@ export class ProgressTracker {
     if (plan.length > 0) {
       lines.push('')
       lines.push(...plan)
+    }
+    const dispatches = this.renderDispatches()
+    if (dispatches.length > 0) {
+      lines.push('')
+      lines.push(...dispatches)
     }
     return `<pre>${escapeHtml(lines.join('\n'))}</pre>`
   }
