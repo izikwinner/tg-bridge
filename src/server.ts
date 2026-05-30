@@ -246,6 +246,7 @@ const armBusyTimer = (): void => {
     if (fsm.current() === ClaudeState.BUSY) {
       log.warn('busy timeout (no activity), forcing IDLE')
       stopPaneWatcher()
+      stopMirror()
       void endTurn('done')
       fsm.forceIdle()
       void drain()
@@ -280,6 +281,88 @@ const stopPaneWatcher = (): void => {
   if (paneWatcher) { clearInterval(paneWatcher); paneWatcher = null; lastPaneFingerprint = '' }
 }
 
+// ── Live terminal mirror ─────────────────────────────────────────────────────
+// During a long/stuck turn, edit a single Telegram message every interval with
+// the latest screen of the tmux pane (last N lines only — old lines drop off so
+// the message never grows past Telegram's 4096-char cap). A delayed start keeps
+// short turns clean; a stale marker flags a frozen/wedged session.
+let mirrorTimer: ReturnType<typeof setInterval> | null = null
+let mirrorStartTimer: ReturnType<typeof setTimeout> | null = null
+let mirrorMsgId: number | null = null
+let mirrorChat: number | null = null
+let mirrorLastBody = ''
+let mirrorLastChangeMs = 0
+let mirrorLastSentHtml = ''
+
+const MIRROR_HARD_CAP = 3500
+const MIRROR_STALE_MS = 90000
+
+const formatMirror = (pane: string, stale: boolean): string => {
+  let lines = pane.split('\n').map((l) => l.replace(/[ \t]+$/, ''))
+  while (lines.length && lines[lines.length - 1] === '') lines.pop()
+  while (lines.length && lines[0] === '') lines.shift()
+  if (lines.length > cfg.mirror.max_lines) lines = lines.slice(-cfg.mirror.max_lines)
+  let body = lines.join('\n')
+  while (body.length > MIRROR_HARD_CAP && lines.length > 1) {
+    lines.shift()
+    body = lines.join('\n')
+  }
+  if (body.length > MIRROR_HARD_CAP) body = body.slice(-MIRROR_HARD_CAP)
+  const name = escapeHtml(cfg.claude.tmux_session)
+  const head = stale
+    ? `🖥 <b>${name}</b> — ⚠️ qotgan bo'lishi mumkin · <code>/new</code> bilan tikla`
+    : `🖥 <b>${name}</b> — terminal (jonli)`
+  return `${head}\n<pre>${escapeHtml(body) || "(bo'sh)"}</pre>`
+}
+
+const renderMirrorTick = async (): Promise<void> => {
+  if (mirrorChat === null) return
+  let pane: string
+  try { pane = await tmux.capturePane() } catch { return }
+  const bodyKey = pane.replace(/[ \t]+$/gm, '')
+  const now = Date.now()
+  if (bodyKey !== mirrorLastBody) { mirrorLastBody = bodyKey; mirrorLastChangeMs = now }
+  const stale = now - mirrorLastChangeMs >= MIRROR_STALE_MS
+  const html = formatMirror(pane, stale)
+  if (html === mirrorLastSentHtml) return
+  try {
+    if (mirrorMsgId === null) {
+      mirrorMsgId = await bot.sendHtml(mirrorChat, html)
+    } else {
+      await bot.editHtml(mirrorChat, mirrorMsgId, html)
+    }
+    mirrorLastSentHtml = html
+  } catch (err) {
+    log.warn('mirror update failed', { error: String(err) })
+  }
+}
+
+const startMirror = (chatId: number): void => {
+  if (!cfg.mirror.enabled) return
+  stopMirror()
+  mirrorChat = chatId
+  mirrorLastBody = ''
+  mirrorLastChangeMs = Date.now()
+  mirrorLastSentHtml = ''
+  mirrorStartTimer = setTimeout(() => {
+    mirrorStartTimer = null
+    void renderMirrorTick()
+    mirrorTimer = setInterval(() => void renderMirrorTick(), cfg.mirror.interval_ms)
+  }, cfg.mirror.start_delay_ms)
+}
+
+function stopMirror(): void {
+  if (mirrorStartTimer) { clearTimeout(mirrorStartTimer); mirrorStartTimer = null }
+  if (mirrorTimer) { clearInterval(mirrorTimer); mirrorTimer = null }
+  const chat = mirrorChat
+  const msg = mirrorMsgId
+  mirrorChat = null
+  mirrorMsgId = null
+  mirrorLastBody = ''
+  mirrorLastSentHtml = ''
+  if (chat !== null && msg !== null) void bot.deleteMessage(chat, msg).catch(() => {})
+}
+
 const drain = async () => {
   if (fsm.current() !== ClaudeState.IDLE) return
   const next = queue.shift()
@@ -298,6 +381,7 @@ const drain = async () => {
   await tmux.sendKeys(next.text)
   armBusyTimer()
   startPaneWatcher()
+  startMirror(next.chat_id)
 }
 
 const uploadsDir = join(cfg.claude.workspace, '.tg-uploads')
@@ -436,6 +520,7 @@ const onTelegramMessage = async (msg: {
     // the next message can drain. If the input loop is wedged, use /new instead.
     disarmBusyTimer()
     stopPaneWatcher()
+    stopMirror()
     stopTyping()
     awaitingUserTool = null
     await tmux.sendEscape().catch(() => {})
@@ -452,6 +537,7 @@ const onTelegramMessage = async (msg: {
     // /stop and /clear are silently ignored).
     disarmBusyTimer()
     stopPaneWatcher()
+    stopMirror()
     stopTyping()
     awaitingUserTool = null
     await endTurnAndDelete()
@@ -573,6 +659,7 @@ const server = await startHttpServer({
     const originChannel: QueueChannel = origin?.channel ?? 'telegram'
     disarmBusyTimer()
     stopPaneWatcher()
+    stopMirror()
     stopTyping()
     if (targetChat !== undefined && (text.length > 0 || files.length > 0)) {
       await endTurnAndDelete()

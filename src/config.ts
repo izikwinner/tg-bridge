@@ -35,6 +35,17 @@ const EnvSchema = z.object({
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
   BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   STREAMING_MODE: z.enum(['off', 'partial', 'progress']).default('progress'),
+  MIRROR_ENABLED: z
+    .union([z.boolean(), z.string()])
+    .default(true)
+    .transform((v) => {
+      if (typeof v === 'boolean') return v
+      const s = v.trim().toLowerCase()
+      return s === 'true' || s === '1' || s === 'yes' || s === 'on'
+    }),
+  MIRROR_INTERVAL_MS: z.coerce.number().int().min(3000).default(10000),
+  MIRROR_START_DELAY_MS: z.coerce.number().int().nonnegative().default(12000),
+  MIRROR_MAX_LINES: z.coerce.number().int().positive().default(40),
   GROQ_API_KEY_FILE: z.string().optional(),
   UPLOADS_TTL_DAYS: z.coerce.number().int().nonnegative().default(30),
   DATABASE_URL_FILE: z.string().optional(),
@@ -69,6 +80,7 @@ export interface AppConfig {
     busy_timeout_ms: number
   }
   streaming: { mode: 'off' | 'partial' | 'progress' }
+  mirror: { enabled: boolean; interval_ms: number; start_delay_ms: number; max_lines: number }
   voice: { groq_api_key_file: string | null }
   uploads: { ttl_days: number }
   db: { dsn_file: string | null; agent_name: string }
@@ -111,6 +123,12 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
       busy_timeout_ms: parsed.BUSY_TIMEOUT_MS,
     },
     streaming: { mode: parsed.STREAMING_MODE },
+    mirror: {
+      enabled: parsed.MIRROR_ENABLED,
+      interval_ms: parsed.MIRROR_INTERVAL_MS,
+      start_delay_ms: parsed.MIRROR_START_DELAY_MS,
+      max_lines: parsed.MIRROR_MAX_LINES,
+    },
     voice: { groq_api_key_file: parsed.GROQ_API_KEY_FILE ?? null },
     uploads: { ttl_days: parsed.UPLOADS_TTL_DAYS },
     db: {
