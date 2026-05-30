@@ -25,12 +25,43 @@ describe('config', () => {
     expect(cfg.features.business_api).toBe(false)
     expect(cfg.features.inject_sender_identity).toBe(false)
     expect(cfg.limits.permission_timeout_ms).toBe(300000)
-    expect(cfg.limits.busy_timeout_ms).toBe(30000)
+    expect(cfg.limits.busy_timeout_ms).toBe(180000)
     expect(cfg.limits.queue_max_depth).toBe(100)
   })
 
   test('rejects missing TELEGRAM_BOT_TOKEN', () => {
     expect(() => loadConfig({})).toThrow(/TELEGRAM_BOT_TOKEN/)
+  })
+
+  test('strictBool: "false" string parses as false', () => {
+    const env = {
+      TELEGRAM_BOT_TOKEN: 't', TELEGRAM_BOT_ID: '1',
+      TELEGRAM_ALLOWED_USER_IDS: '1', TELEGRAM_ALLOWED_CHAT_IDS: '1',
+      BRIDGE_PORT: '9091', BRIDGE_BEARER_TOKEN: 't',
+      TMUX_SOCKET: 's', TMUX_SESSION: 's',
+      CLAUDE_BINARY: '/c', WORKSPACE: '/w', STATE_DIR: '/s', LOG_DIR: '/l',
+      BUSINESS_API_ENABLED: 'false',
+      INJECT_SENDER_IDENTITY: 'false',
+    }
+    const cfg = loadConfig(env)
+    expect(cfg.features.business_api).toBe(false)
+    expect(cfg.features.inject_sender_identity).toBe(false)
+  })
+
+  test('strictBool: "1" / "yes" / "on" parse as true', () => {
+    const base = {
+      TELEGRAM_BOT_TOKEN: 't', TELEGRAM_BOT_ID: '1',
+      TELEGRAM_ALLOWED_USER_IDS: '1', TELEGRAM_ALLOWED_CHAT_IDS: '1',
+      BRIDGE_PORT: '9091', BRIDGE_BEARER_TOKEN: 't',
+      TMUX_SOCKET: 's', TMUX_SESSION: 's',
+      CLAUDE_BINARY: '/c', WORKSPACE: '/w', STATE_DIR: '/s', LOG_DIR: '/l',
+    }
+    for (const v of ['1', 'yes', 'on', 'TRUE']) {
+      expect(loadConfig({ ...base, BUSINESS_API_ENABLED: v }).features.business_api).toBe(true)
+    }
+    for (const v of ['0', 'no', 'off', '', 'random']) {
+      expect(loadConfig({ ...base, BUSINESS_API_ENABLED: v }).features.business_api).toBe(false)
+    }
   })
 
   test('parses alisher flags', () => {

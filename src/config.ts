@@ -3,6 +3,15 @@ import { z } from 'zod'
 const csvNums = (s: string | undefined) =>
   (s ?? '').split(',').map(x => x.trim()).filter(Boolean).map(Number)
 
+const strictBool = z
+  .union([z.boolean(), z.string()])
+  .default(false)
+  .transform((v) => {
+    if (typeof v === 'boolean') return v
+    const s = v.trim().toLowerCase()
+    return s === 'true' || s === '1' || s === 'yes' || s === 'on'
+  })
+
 const EnvSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_ID: z.coerce.number().int().positive(),
@@ -18,13 +27,13 @@ const EnvSchema = z.object({
   WORKSPACE: z.string().min(1),
   STATE_DIR: z.string().min(1),
   LOG_DIR: z.string().min(1),
-  BUSINESS_API_ENABLED: z.coerce.boolean().default(false),
-  INJECT_SENDER_IDENTITY: z.coerce.boolean().default(false),
+  BUSINESS_API_ENABLED: strictBool,
+  INJECT_SENDER_IDENTITY: strictBool,
   OWNER_USER_IDS: z.string().optional(),
   PERMISSION_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   PERMISSION_DEFAULT: z.enum(['allow', 'deny']).default('deny'),
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
-  BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
 })
 
 export interface AppConfig {
