@@ -623,15 +623,23 @@ const server = await startHttpServer({
       stopPaneWatcher()
       log.info('awaiting user input — heartbeat frozen', { tool: toolName })
       const surfaceChat = Array.from(lastInbound.keys()).pop()
+        ?? cfg.features.owner_user_ids[0]
       if (surfaceChat !== undefined) {
         void (async () => {
           try {
             const html = renderAwaitingUserPrompt(toolName, toolArgs)
-            if (html) await bot.sendHtml(surfaceChat, html)
+            if (html) {
+              const msgId = await bot.sendHtml(surfaceChat, html)
+              log.info('modal surfaced to telegram', { chat: surfaceChat, msg_id: msgId })
+            } else {
+              log.warn('renderAwaitingUserPrompt returned null', { tool: toolName })
+            }
           } catch (err) {
             log.warn('failed to surface awaiting-user prompt', { error: String(err) })
           }
         })()
+      } else {
+        log.warn('no surface chat available — modal not delivered to telegram', { tool: toolName })
       }
     } else {
       if (awaitingUserTool) {
