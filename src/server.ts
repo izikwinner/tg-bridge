@@ -708,6 +708,7 @@ await bot.start(async (update) => {
         if (u.callback_query.id) {
           await bot.raw.api.answerCallbackQuery(u.callback_query.id, { text: payload }).catch(() => {})
         }
+        await bot.clearButtons(chatId, msgId)
         queue.push({ chat_id: chatId, user_id: fromId, text: payload, message_id: msgId, channel: 'telegram' })
         void drain()
       }

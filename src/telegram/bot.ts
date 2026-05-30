@@ -43,6 +43,7 @@ export interface BotWrapper {
   raw: Bot
   sendText(chatId: number, text: string, replyToMessageId?: number): Promise<void>
   sendButtons(chatId: number, text: string, buttons: BotButton[]): Promise<void>
+  clearButtons(chatId: number, messageId: number): Promise<void>
   sendHtml(chatId: number, html: string): Promise<number | null>
   editHtml(chatId: number, messageId: number, html: string): Promise<void>
   deleteMessage(chatId: number, messageId: number): Promise<void>
@@ -85,6 +86,16 @@ export function createBot(token: string, log: Logger): BotWrapper {
         })
       } catch (err) {
         log.warn('sendButtons failed', { error: String(err) })
+      }
+    },
+    async clearButtons(chatId, messageId) {
+      try {
+        await bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: { inline_keyboard: [] } })
+      } catch (err) {
+        const msg = String(err)
+        if (!msg.includes('message is not modified')) {
+          log.warn('clearButtons failed', { error: msg })
+        }
       }
     },
     async sendHtml(chatId, html) {
