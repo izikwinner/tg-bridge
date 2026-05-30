@@ -12,6 +12,7 @@
   "dependencies": {
     "grammy": "^1.43.0",
     "js-yaml": "^4.1.0",
+    "postgres": "^3.4.9",
     "zod": "^3.25.0"
   },
   "devDependencies": {

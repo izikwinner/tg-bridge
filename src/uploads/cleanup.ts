@@ -25,7 +25,7 @@ export function cleanupUploads(dir: string, maxAgeMs: number, now: number = Date
         kept += 1
         continue
       }
-      if (now - st.mtimeMs > maxAgeMs) {
+      if (maxAgeMs > 0 && now - st.mtimeMs > maxAgeMs) {
         unlinkSync(path)
         removed += 1
         freedBytes += st.size

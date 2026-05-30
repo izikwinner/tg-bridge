@@ -14,6 +14,9 @@ import { ProgressTracker } from './progress/tracker.js'
 import { transcribeAudio, loadGroqKey } from './voice/groq.js'
 import { downloadTelegramFile } from './telegram/file.js'
 import { cleanupUploads } from './uploads/cleanup.js'
+import { getSql, closeSql, loadDsn, type Sql } from './db/pool.js'
+import { insertChatLog } from './db/chat_log.js'
+import { upsertAgentState } from './db/agent_state.js'
 import { writeFileSync } from 'fs'
 import { basename } from 'path'
 import { createRelay } from './permission/relay.js'
@@ -33,6 +36,28 @@ const log = createLogger({
 
 log.info('starting', { agent: cfg.claude.tmux_session, port: cfg.bridge.port })
 
+const dsn = cfg.db.dsn_file ? loadDsn(cfg.db.dsn_file) : null
+const sql: Sql | null = dsn ? getSql({ dsn, agent: cfg.db.agent_name, logger: log }) : null
+if (sql) log.info('db enabled', { agent: cfg.db.agent_name })
+else log.info('db disabled', { reason: cfg.db.dsn_file ? 'dsn-missing' : 'no-dsn-file' })
+
+const dbInsertIn = async (channel: QueueChannel, text: string, meta: Record<string, unknown>): Promise<void> => {
+  if (!sql) return
+  await insertChatLog(sql, log, { agent: cfg.db.agent_name, channel, direction: 'in', text, meta })
+}
+const dbInsertOut = async (channel: QueueChannel, text: string, meta: Record<string, unknown>): Promise<void> => {
+  if (!sql) return
+  await insertChatLog(sql, log, { agent: cfg.db.agent_name, channel, direction: 'out', text, meta })
+}
+const dbSetWorking = async (task: string | null): Promise<void> => {
+  if (!sql) return
+  await upsertAgentState(sql, log, { agent: cfg.db.agent_name, status: 'working', currentTask: task ?? null })
+}
+const dbSetIdle = async (): Promise<void> => {
+  if (!sql) return
+  await upsertAgentState(sql, log, { agent: cfg.db.agent_name, status: 'idle', currentTask: null, progressHtml: null })
+}
+
 const policyPath = join(cfg.paths.state_dir, '..', 'permission-policy.yaml')
 let policy: Policy = { relay_patterns: [], default: 'allow' }
 if (existsSync(policyPath)) {
@@ -40,7 +65,17 @@ if (existsSync(policyPath)) {
 }
 
 const fsm = createFsm()
-const queue = createQueue<{ chat_id: number; user_id: number; text: string; message_id: number }>({
+
+type QueueChannel = 'telegram' | 'web' | 'swarm'
+interface QueueItem {
+  chat_id: number
+  user_id: number
+  text: string
+  message_id: number
+  channel: QueueChannel
+  web_session_id?: string
+}
+const queue = createQueue<QueueItem>({
   maxDepth: cfg.limits.queue_max_depth,
 })
 
@@ -56,10 +91,17 @@ log.info('tmux session ready')
 
 const bot = createBot(cfg.telegram.bot_token, log)
 
-const lastInbound = new Map<number, number>()
+interface InboundOrigin {
+  message_id: number
+  channel: QueueChannel
+  web_session_id?: string
+}
+const lastInbound = new Map<number, InboundOrigin>()
 
 interface ActiveTurn {
   chatId: number
+  channel: QueueChannel
+  webSessionId?: string
   tracker: ProgressTracker
   progressMsgId: number | null
   pendingEdit: boolean
@@ -84,17 +126,19 @@ const scheduleEdit = (turn: ActiveTurn): void => {
   }, wait)
 }
 
-const startTurn = async (chatId: number): Promise<void> => {
+const startTurn = async (chatId: number, channel: QueueChannel = 'telegram', webSessionId?: string): Promise<void> => {
   if (cfg.streaming.mode === 'off') return
   const tracker = new ProgressTracker()
   const turn: ActiveTurn = {
     chatId,
+    channel,
     tracker,
     progressMsgId: null,
     pendingEdit: false,
     lastEditMs: 0,
     tickHandle: null,
   }
+  if (webSessionId) turn.webSessionId = webSessionId
   active = turn
   const id = await bot.sendHtml(chatId, tracker.render())
   turn.progressMsgId = id
@@ -196,10 +240,17 @@ const drain = async () => {
   if (fsm.current() !== ClaudeState.IDLE) return
   const next = queue.shift()
   if (!next) return
-  lastInbound.set(next.chat_id, next.message_id)
+  const origin: InboundOrigin = { message_id: next.message_id, channel: next.channel }
+  if (next.web_session_id) origin.web_session_id = next.web_session_id
+  lastInbound.set(next.chat_id, origin)
   fsm.onSent()
-  await startTurn(next.chat_id)
-  startTyping(next.chat_id)
+  const inMeta: Record<string, unknown> = { chat_id: next.chat_id, user_id: next.user_id }
+  if (next.channel === 'telegram') inMeta.tg_message_id = next.message_id
+  if (next.web_session_id) inMeta.web_session_id = next.web_session_id
+  void dbInsertIn(next.channel, next.text, inMeta)
+  void dbSetWorking(next.text.slice(0, 120))
+  await startTurn(next.chat_id, next.channel, next.web_session_id)
+  if (next.channel === 'telegram') startTyping(next.chat_id)
   await tmux.sendKeys(next.text)
   armBusyTimer()
   startPaneWatcher()
@@ -359,6 +410,7 @@ const onTelegramMessage = async (msg: {
     user_id: msg.from.id,
     text,
     message_id: msg.message_id,
+    channel: 'telegram',
   })
   if (dropped) log.warn('queue overflow, dropped oldest')
   await drain()
@@ -390,10 +442,29 @@ const server = await startHttpServer({
   port: cfg.bridge.port,
   bearerToken: cfg.bridge.bearer_token,
   onGbrainPush: async (body) => {
-    const b = body as { chat_id?: number; user_id?: number; text?: string }
-    if (!b.chat_id || !b.user_id || !b.text) return { status: 400, body: { error: 'bad payload' } }
-    log.info('gbrain push', { chat_id: b.chat_id, text_len: b.text.length })
-    queue.push({ chat_id: b.chat_id, user_id: b.user_id, text: b.text, message_id: 0 })
+    const b = body as {
+      chat_id?: number; user_id?: number; text?: string
+      chatId?: number; message?: string
+      channel?: string; web_session_id?: string
+      attachments?: Array<{ path?: string; name?: string; kind?: string }>
+    }
+    const chat_id = b.chat_id ?? b.chatId
+    const user_id = b.user_id
+    let text = b.text ?? b.message ?? ''
+    if (Array.isArray(b.attachments) && b.attachments.length > 0) {
+      const lines = b.attachments
+        .filter((a) => a && typeof a.path === 'string' && a.path.length > 0)
+        .map((a) => `Operator fayl yubordi: ${a.path}`)
+      if (lines.length > 0) text = (text ? text + '\n' : '') + lines.join('\n')
+    }
+    const rawChannel = (b.channel ?? 'telegram').toLowerCase()
+    const channel: QueueChannel =
+      rawChannel === 'web' || rawChannel === 'swarm' ? rawChannel : 'telegram'
+    if (!chat_id || !user_id || !text) return { status: 400, body: { error: 'bad payload' } }
+    log.info('gbrain push', { chat_id, channel, text_len: text.length, attachments: b.attachments?.length ?? 0 })
+    const item: QueueItem = { chat_id, user_id, text, message_id: 0, channel }
+    if (b.web_session_id) item.web_session_id = b.web_session_id
+    queue.push(item)
     void drain()
     return { status: 200, body: { status: 'accepted' } }
   },
@@ -402,12 +473,16 @@ const server = await startHttpServer({
     log.info('stop hook', { msg_len: assistant_message.length, chat: Array.from(lastInbound.keys()).pop() })
     const { text, reactions, buttons, files } = parseReply(assistant_message)
     const targetChat = Array.from(lastInbound.keys()).pop()
-    const targetMsg = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
+    const origin = targetChat !== undefined ? lastInbound.get(targetChat) : undefined
+    const targetMsg = origin?.message_id
+    const originChannel: QueueChannel = origin?.channel ?? 'telegram'
     disarmBusyTimer()
     stopPaneWatcher()
     stopTyping()
     if (targetChat !== undefined && (text.length > 0 || files.length > 0)) {
       await endTurnAndDelete()
+      // Hybrid send-to-Telegram: always (originChannel='web' linked mode keeps
+      // the operator's TG chat in the loop). DB-mirror happens below.
       if (text.length > 0) {
         if (buttons.length > 0) {
           await bot.sendButtons(targetChat, text, buttons)
@@ -424,16 +499,27 @@ const server = await startHttpServer({
         }
         await bot.sendFile(targetChat, f)
       }
-      if (reactions.length === 0 && targetMsg !== undefined) {
-        await bot.setReaction(targetChat, targetMsg, 'thumbsup')
-      } else {
-        for (const r of reactions) {
-          if (targetMsg !== undefined) await bot.setReaction(targetChat, targetMsg, r)
+      if (originChannel === 'telegram') {
+        if (reactions.length === 0 && targetMsg !== undefined) {
+          await bot.setReaction(targetChat, targetMsg, 'thumbsup')
+        } else {
+          for (const r of reactions) {
+            if (targetMsg !== undefined) await bot.setReaction(targetChat, targetMsg, r)
+          }
         }
+      }
+      const outMeta: Record<string, unknown> = { chat_id: targetChat }
+      if (origin?.web_session_id) outMeta.web_session_id = origin.web_session_id
+      if (buttons.length > 0) outMeta.buttons = buttons
+      if (files.length > 0) outMeta.files = files.map((f) => ({ path: f.path, kind: f.kind ?? null }))
+      if (text.length > 0 || files.length > 0) {
+        const dbText = text.length > 0 ? text : files.map((f) => `[file] ${f.path}`).join('\n')
+        void dbInsertOut(originChannel, dbText, outMeta)
       }
     } else {
       await endTurn('done')
     }
+    void dbSetIdle()
     fsm.onStop()
     void drain()
     return { status: 200, body: { ok: true } }
@@ -538,7 +624,7 @@ await bot.start(async (update) => {
         if (u.callback_query.id) {
           await bot.raw.api.answerCallbackQuery(u.callback_query.id, { text: payload }).catch(() => {})
         }
-        queue.push({ chat_id: chatId, user_id: fromId, text: payload, message_id: msgId })
+        queue.push({ chat_id: chatId, user_id: fromId, text: payload, message_id: msgId, channel: 'telegram' })
         void drain()
       }
     }
