@@ -424,8 +424,47 @@ const onTelegramMessage = async (msg: {
     log.info('denied', { reason: gate, user_id: msg.from.id })
     return
   }
-  if ((msg.text ?? '').trim().toLowerCase() === '/status') {
+  const cmd = (msg.text ?? '').trim().toLowerCase()
+  if (cmd === '/status') {
     await bot.sendHtml(msg.chat.id, renderStatus())
+    return
+  }
+  // Bridge control commands. These must be handled here (not forwarded into the
+  // pane) because when the TUI is wedged, send-keys into Claude is ignored.
+  if (cmd === '/stop') {
+    // Soft interrupt: Escape into the pane + reset bridge turn state to IDLE so
+    // the next message can drain. If the input loop is wedged, use /new instead.
+    disarmBusyTimer()
+    stopPaneWatcher()
+    stopTyping()
+    awaitingUserTool = null
+    await tmux.sendEscape().catch(() => {})
+    await endTurn('done')
+    fsm.forceIdle()
+    void dbSetIdle()
+    await bot.sendHtml(msg.chat.id, "⏹ Escape yuborildi, holat IDLE. Agar qotib qolsa — <code>/new</code> hard restart qiladi.")
+    void drain()
+    return
+  }
+  if (cmd === '/new' || cmd === '/reset' || cmd === '/clear' || cmd === '/kill') {
+    // Hard restart: kill + respawn the Claude process and wipe all bridge state.
+    // Works even when the TUI input loop is dead (the failure mode where typed
+    // /stop and /clear are silently ignored).
+    disarmBusyTimer()
+    stopPaneWatcher()
+    stopTyping()
+    awaitingUserTool = null
+    await endTurnAndDelete()
+    while (queue.shift()) { /* drain pending */ }
+    fsm.forceIdle()
+    void dbSetIdle()
+    try {
+      await tmux.hardRestart()
+      await bot.sendHtml(msg.chat.id, "🔄 Claude sessiyasi qayta ishga tushirildi (toza kontekst).")
+    } catch (err) {
+      log.warn('hard restart failed', { error: String(err) })
+      await bot.sendHtml(msg.chat.id, "⚠️ restart xato: " + escapeHtml(String(err)))
+    }
     return
   }
   let text = msg.text ?? msg.caption ?? ''
