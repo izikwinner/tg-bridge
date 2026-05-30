@@ -30,7 +30,7 @@ const EnvSchema = z.object({
   BUSINESS_API_ENABLED: strictBool,
   INJECT_SENDER_IDENTITY: strictBool,
   OWNER_USER_IDS: z.string().optional(),
-  PERMISSION_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
+  PERMISSION_TIMEOUT_MS: z.coerce.number().int().positive().default(50000),
   PERMISSION_DEFAULT: z.enum(['allow', 'deny']).default('deny'),
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
   BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
