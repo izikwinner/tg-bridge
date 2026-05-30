@@ -1,0 +1,20 @@
+[Unit]
+Description=tg-bridge (%i)
+After=network-online.target
+Wants=network-online.target
+PartOf=tg-bridge.target
+
+[Service]
+Type=simple
+User=Izik
+WorkingDirectory=/opt/tg-bridge
+EnvironmentFile=/home/Izik/.claude-lab/%i/.claude/tg-bridge/channel.env
+Environment=PATH=/home/Izik/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/Izik/.bun/bin/bun run src/server.ts
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/Izik/.claude-lab/%i/.claude/tg-bridge/logs/bridge.log
+StandardError=append:/home/Izik/.claude-lab/%i/.claude/tg-bridge/logs/bridge.err
+
+[Install]
+WantedBy=tg-bridge.target
