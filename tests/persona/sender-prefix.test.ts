@@ -5,12 +5,12 @@ describe('injectSenderPrefix', () => {
   test('owner identified', () => {
     const out = injectSenderPrefix({
       text: 'hello',
-      user_id: 5660438838,
-      username: 'izik',
-      first_name: 'Izzatulla',
-      owner_ids: [5660438838, 8376223320],
+      user_id: 100000001,
+      username: 'operator',
+      first_name: 'Operator',
+      owner_ids: [100000001, 100000002],
     })
-    expect(out).toBe('[sender: id=5660438838 @izik name=Izzatulla | role=owner]\nhello')
+    expect(out).toBe('[sender: id=100000001 @operator name=Operator | role=owner]\nhello')
   })
 
   test('client (non-owner) identified', () => {
@@ -19,7 +19,7 @@ describe('injectSenderPrefix', () => {
       user_id: 1234567,
       username: 'client_user',
       first_name: 'Алишер',
-      owner_ids: [5660438838],
+      owner_ids: [100000001],
     })
     expect(out).toBe('[sender: id=1234567 @client_user name=Алишер | role=client]\nнужна помощь')
   })

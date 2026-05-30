@@ -3,7 +3,7 @@ import { ProgressTracker, summarizeToolInput } from '../../src/progress/tracker'
 
 describe('summarizeToolInput', () => {
   test('Read/Edit/Write → last two path parts', () => {
-    expect(summarizeToolInput('Read', { file_path: '/home/Izik/foo/bar.ts' })).toBe('foo/bar.ts')
+    expect(summarizeToolInput('Read', { file_path: '/home/agent/foo/bar.ts' })).toBe('foo/bar.ts')
     expect(summarizeToolInput('Edit', { file_path: 'a.ts' })).toBe('a.ts')
   })
 

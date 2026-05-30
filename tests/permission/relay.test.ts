@@ -6,7 +6,7 @@ describe('relay', () => {
     const sent: { chatId: number; text: string; reqId: string }[] = []
     const relay = createRelay({
       sendPrompt: async (chatId, text, reqId) => { sent.push({ chatId, text, reqId }) },
-      ownerChatId: 5660438838,
+      ownerChatId: 100000001,
       timeoutMs: 1000,
       defaultDecision: 'deny',
     })
@@ -20,7 +20,7 @@ describe('relay', () => {
   test('defaults to deny on timeout', async () => {
     const relay = createRelay({
       sendPrompt: async () => {},
-      ownerChatId: 5660438838,
+      ownerChatId: 100000001,
       timeoutMs: 50,
       defaultDecision: 'deny',
     })
@@ -31,7 +31,7 @@ describe('relay', () => {
   test('ignores callback for unknown request_id', async () => {
     const relay = createRelay({
       sendPrompt: async () => {},
-      ownerChatId: 5660438838,
+      ownerChatId: 100000001,
       timeoutMs: 100,
       defaultDecision: 'deny',
     })

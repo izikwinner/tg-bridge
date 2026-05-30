@@ -32,7 +32,7 @@ describe('insertChatLog', () => {
     const { log } = makeLogger()
     const { sql, calls } = makeMockSql('ok')
     await insertChatLog(sql, log, {
-      agent: 'ultron',
+      agent: 'alpha',
       channel: 'web',
       direction: 'in',
       text: 'hello',
@@ -40,7 +40,7 @@ describe('insertChatLog', () => {
     })
     expect(calls).toHaveLength(1)
     const c = calls[0]!
-    expect(c.values[0]).toBe('ultron')
+    expect(c.values[0]).toBe('alpha')
     expect(c.values[1]).toBe('web')
     expect(c.values[2]).toBe('in')
     expect(c.values[3]).toBe('hello')

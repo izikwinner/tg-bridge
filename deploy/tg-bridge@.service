@@ -4,17 +4,23 @@ After=network-online.target
 Wants=network-online.target
 PartOf=tg-bridge.target
 
+# Edit the four absolute paths below to match your install:
+#   - User=         the OS user that owns ~/.claude-lab/<agent>
+#   - EnvironmentFile, StandardOutput, StandardError — that user's home
+#   - PATH and ExecStart — the bun binary location (run `command -v bun` to find it)
+# Then: sudo systemctl daemon-reload
+
 [Service]
 Type=simple
-User=Izik
+User=agent
 WorkingDirectory=/opt/tg-bridge
-EnvironmentFile=/home/Izik/.claude-lab/%i/.claude/tg-bridge/channel.env
-Environment=PATH=/home/Izik/.bun/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/Izik/.bun/bin/bun run src/server.ts
+EnvironmentFile=/home/agent/.claude-lab/%i/.claude/tg-bridge/channel.env
+Environment=PATH=/home/agent/.bun/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/agent/.bun/bin/bun run src/server.ts
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:/home/Izik/.claude-lab/%i/.claude/tg-bridge/logs/bridge.log
-StandardError=append:/home/Izik/.claude-lab/%i/.claude/tg-bridge/logs/bridge.err
+StandardOutput=append:/home/agent/.claude-lab/%i/.claude/tg-bridge/logs/bridge.log
+StandardError=append:/home/agent/.claude-lab/%i/.claude/tg-bridge/logs/bridge.err
 
 [Install]
 WantedBy=tg-bridge.target
