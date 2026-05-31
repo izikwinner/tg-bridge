@@ -279,6 +279,7 @@ const armBusyTimer = (): void => {
       log.warn('busy timeout (no activity), forcing IDLE')
       stopPaneWatcher()
       stopMirror()
+      stopTyping()
       void endTurn('done')
       fsm.forceIdle()
       void drain()
