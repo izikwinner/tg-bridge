@@ -43,7 +43,7 @@ const EnvSchema = z.object({
       const s = v.trim().toLowerCase()
       return s === 'true' || s === '1' || s === 'yes' || s === 'on'
     }),
-  MIRROR_INTERVAL_MS: z.coerce.number().int().min(3000).default(10000),
+  MIRROR_INTERVAL_MS: z.coerce.number().int().min(3000).default(5000),
   MIRROR_START_DELAY_MS: z.coerce.number().int().nonnegative().default(12000),
   MIRROR_MAX_LINES: z.coerce.number().int().positive().default(40),
   GROQ_API_KEY_FILE: z.string().optional(),
