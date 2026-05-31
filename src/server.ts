@@ -198,6 +198,18 @@ let lastPaneFingerprint = ''
 // alive and waiting for the operator. We freeze the heartbeat for these.
 const AWAITING_USER_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode'])
 let awaitingUserTool: string | null = null
+// The option-question message surfaced to Telegram for the active modal. The
+// question already shows in the mirror, so once it's answered we delete this
+// (and the operator's typed answer) — keeping the chat to the mirror + the real
+// conversation. Scoped to this modal only; nothing else is removed.
+let awaitingModal: { chat: number; msgId: number } | null = null
+
+const clearAwaitingModal = (alsoDelete: boolean): void => {
+  if (awaitingModal && alsoDelete) {
+    void bot.deleteMessage(awaitingModal.chat, awaitingModal.msgId).catch(() => {})
+  }
+  awaitingModal = null
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -548,6 +560,7 @@ const onTelegramMessage = async (msg: {
     stopMirror()
     stopTyping()
     awaitingUserTool = null
+    clearAwaitingModal(true)
     await tmux.sendEscape().catch(() => {})
     await endTurn('done')
     fsm.forceIdle()
@@ -565,6 +578,7 @@ const onTelegramMessage = async (msg: {
     stopMirror()
     stopTyping()
     awaitingUserTool = null
+    clearAwaitingModal(true)
     await endTurnAndDelete()
     while (queue.shift()) { /* drain pending */ }
     fsm.forceIdle()
@@ -605,6 +619,10 @@ const onTelegramMessage = async (msg: {
   if (awaitingUserTool) {
     log.info('routing message into active modal', { tool: awaitingUserTool, text_len: text.length })
     await tmux.sendKeys(text)
+    // Answered the option-question by typing — drop the surfaced question and
+    // this answer message (only this modal's; the rest of the chat stays).
+    clearAwaitingModal(true)
+    void bot.deleteMessage(msg.chat.id, msg.message_id).catch(() => {})
     return
   }
   const dropped = queue.push({
@@ -739,6 +757,9 @@ const server = await startHttpServer({
     if (awaitingUserTool && tool === awaitingUserTool) {
       log.info('user answered, resuming heartbeat', { tool })
       awaitingUserTool = null
+      // Modal resolved (possibly answered straight in the TUI) — drop any stale
+      // surfaced question still sitting in the chat.
+      clearAwaitingModal(true)
     }
     armBusyTimer()
     if (active) startPaneWatcher()
@@ -781,6 +802,7 @@ const server = await startHttpServer({
             const html = renderAwaitingUserPrompt(toolName, toolArgs)
             if (html) {
               const msgId = await bot.sendHtml(surfaceChat, html)
+              if (msgId !== null) awaitingModal = { chat: surfaceChat, msgId }
               log.info('modal surfaced to telegram', { chat: surfaceChat, msg_id: msgId })
             } else {
               log.warn('renderAwaitingUserPrompt returned null', { tool: toolName })
@@ -796,6 +818,7 @@ const server = await startHttpServer({
       if (awaitingUserTool) {
         log.info('user activity detected, resuming heartbeat', { prev: awaitingUserTool })
         awaitingUserTool = null
+        clearAwaitingModal(true)
       }
       armBusyTimer()
       if (active) startPaneWatcher()
@@ -867,7 +890,10 @@ await bot.start(async (update) => {
         if (u.callback_query.id) {
           await bot.raw.api.answerCallbackQuery(u.callback_query.id, { text: payload }).catch(() => {})
         }
-        await bot.clearButtons(chatId, msgId)
+        // Answer chosen — the question is in the mirror, so drop the surfaced
+        // option-question message instead of just clearing its buttons.
+        await bot.deleteMessage(chatId, msgId)
+        if (awaitingModal?.msgId === msgId) awaitingModal = null
         queue.push({ chat_id: chatId, user_id: fromId, text: payload, message_id: msgId, channel: 'telegram' })
         void drain()
       }
