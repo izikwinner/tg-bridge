@@ -3,6 +3,9 @@ import { createLogger } from './log.js'
 import { createFsm, ClaudeState } from './claude/state.js'
 import { createQueue } from './claude/queue.js'
 import { createTmuxSession } from './claude/tmux-session.js'
+import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { loadOrCreateSid, buildClaudeCommand, latestTranscriptSid } from './claude/session-id.js'
 import { createBot } from './telegram/bot.js'
 import { allowMessage } from './telegram/gate.js'
 import { injectSenderPrefix } from './persona/sender-prefix.js'
@@ -79,11 +82,28 @@ const queue = createQueue<QueueItem>({
   maxDepth: cfg.limits.queue_max_depth,
 })
 
+// Stable session id persisted on disk → resume the same conversation across
+// reboot / hardRestart instead of starting fresh (gateway.py's durable-resume).
+// On first run (no sid file yet) adopt the workspace's most recent transcript
+// so the conversation that is already live survives the first respawn too.
+const claudeHome = process.env.HOME ?? homedir()
+const claudeSid = loadOrCreateSid(
+  cfg.paths.state_dir,
+  () => latestTranscriptSid(claudeHome, cfg.claude.workspace) ?? randomUUID(),
+)
+log.info('claude session id', { sid: claudeSid })
 const tmux = createTmuxSession({
   socket: cfg.claude.tmux_socket,
   session: cfg.claude.tmux_session,
   cwd: cfg.claude.workspace,
-  command: `${cfg.claude.binary} ${cfg.claude.flags}`,
+  buildCommand: () =>
+    buildClaudeCommand({
+      binary: cfg.claude.binary,
+      flags: cfg.claude.flags,
+      workspace: cfg.claude.workspace,
+      sid: claudeSid,
+      home: claudeHome,
+    }),
 })
 
 await tmux.ensure()

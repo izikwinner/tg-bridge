@@ -23,7 +23,7 @@ describe('tmux-session (integration)', () => {
       socket: SOCK,
       session: SESS,
       cwd: '/tmp',
-      command: '/bin/sh',
+      buildCommand: () => '/bin/sh',
     })
     await s.ensure()
     expect(await s.exists()).toBe(true)
@@ -34,7 +34,7 @@ describe('tmux-session (integration)', () => {
       socket: SOCK,
       session: SESS,
       cwd: '/tmp',
-      command: '/bin/sh',
+      buildCommand: () => '/bin/sh',
     })
     await s.ensure()
     await s.sendKeys('echo hello-tmux-int')

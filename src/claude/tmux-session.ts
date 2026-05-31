@@ -4,7 +4,10 @@ export interface TmuxSessionOpts {
   socket: string
   session: string
   cwd: string
-  command: string
+  // Re-evaluated on every (re)spawn so the resume flag is recomputed from the
+  // current on-disk transcript state (first boot → --session-id, respawn after
+  // a transcript exists → --resume). See session-id.ts:buildClaudeCommand.
+  buildCommand: () => string
 }
 
 export interface TmuxSession {
@@ -37,7 +40,7 @@ export function createTmuxSession(opts: TmuxSessionOpts): TmuxSession {
       if (r.ok) return
       const r2 = await run([
         ...baseArgs, 'new-session', '-d', '-s', opts.session,
-        '-c', opts.cwd, opts.command,
+        '-c', opts.cwd, opts.buildCommand(),
       ])
       if (!r2.ok) throw new Error(`tmux new-session failed: ${r2.stderr}`)
     },
@@ -60,7 +63,7 @@ export function createTmuxSession(opts: TmuxSessionOpts): TmuxSession {
       await new Promise((resolve) => setTimeout(resolve, 300))
       const r = await run([
         ...baseArgs, 'new-session', '-d', '-s', opts.session,
-        '-c', opts.cwd, opts.command,
+        '-c', opts.cwd, opts.buildCommand(),
       ])
       if (!r.ok) throw new Error(`tmux new-session (restart) failed: ${r.stderr}`)
     },
