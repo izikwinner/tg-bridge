@@ -34,7 +34,7 @@ const EnvSchema = z.object({
   PERMISSION_DEFAULT: z.enum(['allow', 'deny']).default('deny'),
   QUEUE_MAX_DEPTH: z.coerce.number().int().positive().default(100),
   BUSY_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
-  STREAMING_MODE: z.enum(['off', 'partial', 'progress']).default('progress'),
+  STREAMING_MODE: z.enum(['off', 'partial', 'progress']).default('off'),
   MIRROR_ENABLED: z
     .union([z.boolean(), z.string()])
     .default(true)

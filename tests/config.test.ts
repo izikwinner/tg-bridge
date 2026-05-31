@@ -27,7 +27,7 @@ describe('config', () => {
     expect(cfg.limits.permission_timeout_ms).toBe(50000)
     expect(cfg.limits.busy_timeout_ms).toBe(300000)
     expect(cfg.limits.queue_max_depth).toBe(100)
-    expect(cfg.streaming.mode).toBe('progress')
+    expect(cfg.streaming.mode).toBe('off')
     expect(cfg.voice.groq_api_key_file).toBeNull()
   })
 

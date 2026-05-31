@@ -313,11 +313,13 @@ let mirrorChat: number | null = null
 let mirrorLastBody = ''
 let mirrorLastChangeMs = 0
 let mirrorLastSentHtml = ''
+// When the current turn started — drives the "working — Ns" header on the mirror.
+let turnStartMs = 0
 
 const MIRROR_HARD_CAP = 3500
 const MIRROR_STALE_MS = 90000
 
-const formatMirror = (pane: string, stale: boolean): string => {
+const formatMirror = (pane: string, stale: boolean, elapsedSec: number): string => {
   let lines = pane.split('\n').map((l) => l.replace(/[ \t]+$/, ''))
   while (lines.length && lines[lines.length - 1] === '') lines.pop()
   while (lines.length && lines[0] === '') lines.shift()
@@ -329,9 +331,10 @@ const formatMirror = (pane: string, stale: boolean): string => {
   }
   if (body.length > MIRROR_HARD_CAP) body = body.slice(-MIRROR_HARD_CAP)
   const name = escapeHtml(cfg.claude.tmux_session)
-  const head = stale
-    ? `🖥 <b>${name}</b> — ⚠️ qotgan bo'lishi mumkin · <code>/new</code> bilan tikla`
-    : `🖥 <b>${name}</b> — terminal (jonli)`
+  const working = stale
+    ? `⚠️ <b>qotgan</b> — ${elapsedSec}s · <code>/new</code> bilan tikla`
+    : `⏳ <b>working</b> — ${elapsedSec}s`
+  const head = `${working}\n🖥 <b>${name}</b> — terminal (jonli)`
   return `${head}\n<pre>${escapeHtml(body) || "(bo'sh)"}</pre>`
 }
 
@@ -343,7 +346,8 @@ const renderMirrorTick = async (): Promise<void> => {
   const now = Date.now()
   if (bodyKey !== mirrorLastBody) { mirrorLastBody = bodyKey; mirrorLastChangeMs = now }
   const stale = now - mirrorLastChangeMs >= MIRROR_STALE_MS
-  const html = formatMirror(pane, stale)
+  const elapsedSec = turnStartMs ? Math.round((now - turnStartMs) / 1000) : 0
+  const html = formatMirror(pane, stale, elapsedSec)
   if (html === mirrorLastSentHtml) return
   try {
     if (mirrorMsgId === null) {
@@ -391,6 +395,7 @@ const drain = async () => {
   if (next.web_session_id) origin.web_session_id = next.web_session_id
   lastInbound.set(next.chat_id, origin)
   fsm.onSent()
+  turnStartMs = Date.now()
   const inMeta: Record<string, unknown> = { chat_id: next.chat_id, user_id: next.user_id }
   if (next.channel === 'telegram') inMeta.tg_message_id = next.message_id
   if (next.web_session_id) inMeta.web_session_id = next.web_session_id
